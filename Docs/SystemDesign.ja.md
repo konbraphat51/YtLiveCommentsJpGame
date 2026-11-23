@@ -3,7 +3,7 @@
 この文書は、日本のゲーム配信者のYouTube Liveチャットを収集し、各コメントをその時点でプレイ中のゲームに紐づける仕組みを説明します。
 
 - ステータス: 設計段階(未実装)
-- 英語版(正): [SystemDesign.md](SystemDesign.md)
+- 英語版(正): [SystemDesign.md](SystemDesign.md)。ER図・クラス図・シーケンス図は英語版にあります。
 
 ## 1. 目的
 
@@ -15,213 +15,332 @@
 | --- | --- |
 | 公開ライブ配信とそのアーカイブ(チャットリプレイ) | メンバー限定配信、削除・非公開化されたアーカイブ |
 | 日本の配信者(VTuberを含む) | ショート動画、プレミア公開 |
-| **時間区間(セグメント)単位**でのゲーム紐づけ | 映像フレーム単位のゲーム認識(後続フェーズで対応予定) |
-| チャット本文、スパチャ、メンバーシップ、ステッカー、絵文字 | 映像・音声・文字起こし |
+| **時間区間(セグメント)単位**でのゲーム紐づけ | ビン幅(既定30分)より細かい映像ベースの区間分割 |
+| 間引いて取得した静止画を、OpenAIの安価な画像対応モデルで判定し、ゲーム実況区間をおおまかに特定 | 映像・音声全体のダウンロード、文字起こし |
+| チャット本文、スパチャ、メンバーシップ、ステッカー、絵文字 | |
 
 ### 1.2 要件
 
 機能要件
 
-- F1: 対象チャンネルの台帳を管理し、各チャンネルの選定理由を記録する
+- F1: 対象チャンネルは、**統一され、バージョン管理された包含基準**で決める。この基準は全ての候補に同じ方法で適用する(4.2節)。候補ごとに測定値と判定結果を記録する
 - F2: 登録チャンネルの終了済み配信と予定配信を検出する
 - F3: 各配信のチャットを全件取得し、全メッセージに動画内の相対時刻を付ける
 - F4: どのゲームを、どの時間区間(セグメント)でプレイしていたかを特定する
 - F5: `マイクラ`・`Minecraft`・`MC` のような表記揺れを、1つの正規ゲームに名寄せする
 - F6: メッセージとゲームを結合した、バージョン付きのデータセットを出力する
+- F7: **ゲーム**(タイトル、ジャンル、プラットフォーム、紐づけ品質)、**コメント**(種別、キーワード、投稿者、テキスト特徴量)、**チャンネル**(ID、グループ・事務所、VTuberかどうか、規模)を任意に組み合わせて、データセットを絞り込めるようにする。利用者が結合処理を自分で書かなくて済むようにする
 
 非機能要件
 
 - N1: **冪等性と再開可能性。** 各ステージを再実行しても重複が生じず、中断したジョブは途中から再開できる
 - N2: **生データは不変。** 取得したレスポンスはそのまま保存し、パーサを改修したときに正規化をやり直せるようにする
 - N3: **出自の記録。** 全てのゲームラベルに、根拠とした情報源と信頼度を記録する
-- N4: **クォータへの配慮。** YouTube Data API の既定上限 10,000 units/日 に収める
+- N4: **クォータと費用への配慮。** YouTube Data API の既定上限 10,000 units/日 に収め、OpenAI API の費用も設定した日額上限以下に抑える
 - N5: **プライバシー保護。** 派生データでは、コメント投稿者の識別子を全て仮名化する
 
 ## 2. データソースの制約
 
-以下の制約が、設計全体を方向づけています。
-
 | 必要な情報 | 取得元 | 備考 |
 | --- | --- | --- |
-| チャンネルの新着・配信中の動画 | チャンネルRSS `https://www.youtube.com/feeds/videos.xml?channel_id=...` | クォータを消費せず、直近約15件を返す。ポーリングに向く |
-| 過去のアップロード履歴の全件 | Data API `playlistItems.list`(アップロード再生リスト) | 50件あたり1 unit。過去分の取得(バックフィル)に使う |
-| 配信のメタデータ | Data API `videos.list`(`snippet`, `liveStreamingDetails`, `contentDetails`, `topicDetails`) | 50本あたり1 unit。`actualStartTime`/`actualEndTime`、`categoryId`(20 = ゲーム)、ジャンル粒度の `topicCategories` が取れる。**ゲームタイトルは取れない** |
-| ゲームタイトル(動画単位) | 視聴ページの「ゲーム」カード(`ytInitialData` 内) | 配信者が設定するもので、自動生成のゲームトピックチャンネルにリンクしている。その `browseId` を安定IDとして使える。内部構造は時期によって変わるため、壊れにくいパーサが必要(**Phase 0 のスパイクで要検証**) |
-| 配信中のゲーム切り替え | チャプター(概要欄のタイムスタンプ行)、タイトルの `【...】`、ハッシュタグ | ヒューリスティックで、別名辞書が必要 |
-| 終了済み配信のチャット | `yt-dlp`(`live_chat` 字幕トラック)または `chat-downloader` によるチャットリプレイ | クォータを消費しない。各メッセージに `videoOffsetTimeMsec` がある。モデレーターが削除したメッセージは含まれない |
-| 配信中のチャット | `chat-downloader` / `pytchat`(または Data API `liveChatMessages.list`。こちらはクォータを消費) | アーカイブを削除・非公開化する配信者向けに必要 |
+| チャンネルの新着・配信中の動画 | チャンネルRSS `https://www.youtube.com/feeds/videos.xml?channel_id=...` | クォータを消費せず、直近約15件を返す |
+| 過去のアップロード履歴の全件 | Data API `playlistItems.list`(アップロード再生リスト) | 50件あたり1 unit |
+| 配信のメタデータ | Data API `videos.list` | 50本あたり1 unit。開始・終了時刻やカテゴリ(20 = ゲーム)は取れるが、**ゲームタイトルは取れない** |
+| ゲームタイトル(動画単位) | 視聴ページの「ゲーム」カード(`ytInitialData` 内) | トピックチャンネルIDを安定IDとして使える。内部構造が変わるため、Phase 0 のスパイクで要検証 |
+| 配信中のゲーム切り替え | 概要欄のチャプター、タイトルの `【...】`、ハッシュタグ | ヒューリスティックで、別名辞書が必要 |
+| 指定時刻の静止画 | `yt-dlp` で映像のみのURLを解決し、`ffmpeg -ss <t> -i <url> -frames:v 1` で1枚取得 | 1枚ごとに、ごく一部のデータしか転送しない。代替手段として、ストーリーボード(シークバーのプレビュー画像。`sb*` フォーマット)も使える |
+| 画面に映っている内容の判定 | OpenAIの安価な画像対応モデル(`detail: "low"`、Structured Outputs) | トークン単位の従量課金。結果を急がない場合は Batch API の方が安い |
+| 終了済み配信のチャット | `yt-dlp`(`live_chat`)または `chat-downloader` によるチャットリプレイ | クォータを消費しない。各メッセージに `videoOffsetTimeMsec` がある。モデレーターが削除したメッセージは含まれない |
+| 配信中のチャット | `chat-downloader` / `pytchat` | アーカイブを削除・非公開化する配信者向けに必要 |
 
 ## 3. 全体構成
 
-```mermaid
-flowchart LR
-  subgraph Sources
-    RSS[Channel RSS]
-    API[YouTube Data API v3]
-    WATCH[Watch page HTML]
-    CHAT[Chat replay / live chat]
-  end
-
-  subgraph Pipeline
-    REG[ChannelRegistry]
-    DISC[StreamDiscoverer]
-    META[MetadataCollector]
-    CHATF[ChatCollector]
-    SEG[GameSegmenter]
-    RES[GameResolver]
-    NORM[ChatNormalizer]
-    EXP[DatasetExporter]
-  end
-
-  subgraph Storage
-    RAW[(Raw store<br/>immutable JSON.gz)]
-    CAT[(Catalog DB<br/>SQLite)]
-    PQ[(Normalized Parquet)]
-    DS[(Versioned dataset)]
-  end
-
-  REG --> DISC
-  RSS --> DISC
-  API --> DISC
-  DISC --> CAT
-  CAT --> META
-  API --> META
-  WATCH --> META
-  META --> RAW
-  META --> CAT
-  CAT --> CHATF
-  CHAT --> CHATF
-  CHATF --> RAW
-  RAW --> NORM --> PQ
-  CAT --> SEG
-  RES <--> SEG
-  SEG --> CAT
-  PQ --> EXP
-  CAT --> EXP
-  EXP --> DS
-```
-
-各ステージは入力をストレージから読み、出力をストレージに書きます。ステージ同士が直接呼び出し合うことはありません。そのため各ステージを独立して再実行でき、オーケストレータはカタログDB上のジョブキューだけで済みます。
+各ステージは入力をストレージから読み、出力をストレージに書きます。ステージ同士が直接呼び出し合うことはありません(図は英語版3章)。そのため各ステージを独立して再実行でき、オーケストレータはカタログDB上のジョブキューだけで済みます。
 
 ## 4. パイプラインのステージ
 
 | # | ステージ | 入力 | 出力 | 起動タイミング |
 | --- | --- | --- | --- | --- |
-| 1 | `ChannelRegistry` | シードCSV(`Config/Channels.csv`)と、任意のチャンネル探索 | `channels` | 手動/週次 |
+| 1 | `ChannelRegistry`(`CandidateSource` 群 + `ChannelEligibilityEvaluator`) | 全ての探索元から集めた候補チャンネル、`Config/ChannelPolicy.yaml` | `channel_candidates`、`channel_eligibility`、`channels`(基準を満たしたもののみ) | 月次の再評価と手動実行 |
 | 2 | `StreamDiscoverer` | `channels` | `videos`(状態 `DISCOVERED`) | RSSを5〜10分ごと。APIによるバックフィルは必要時 |
-| 3 | `MetadataCollector` | `videos` | API・視聴ページの生スナップショット。`videos` に配信詳細とゲームカードを反映 | 動画の検出時と、配信終了後の再取得時 |
-| 4 | `ChatCollector` | 終了済み(または配信中)の動画 | 生チャット `*.jsonl.gz` | アーカイブ: `actualEndTime` から猶予時間が経過した後。ライブ: `liveBroadcastContent=live` の間 |
-| 5 | `ChatNormalizer` | 生チャット | `messages` Parquet(`video_id` でパーティション分割) | ステージ4の完了後 |
-| 6 | `GameSegmenter` + `GameResolver` | 動画メタデータ、別名辞書 | `game_segments` | ステージ3の完了後。別名辞書を更新したときにも再実行 |
-| 7 | `DatasetExporter` | `messages` + `game_segments` + `games` | `Dataset/vYYYYMMDD/` | 手動 |
+| 3 | `MetadataCollector` | `videos` | 生スナップショット。配信詳細とゲームカード | 動画の検出時と、配信終了後の再取得時 |
+| 4 | `ChatCollector` | 終了済み(または配信中)の動画 | 生チャット `*.jsonl.gz` | 配信終了から猶予時間が経過した後、またはライブ中 |
+| 5 | `ChatNormalizer` | 生チャット | `messages` Parquet | ステージ4の完了後 |
+| 6 | `FrameCollector` | 終了済みの動画、ビンの分割計画 | JPEG静止画、`frames` | 配信終了から猶予時間が経過した後。ステージ4と並行して実行 |
+| 7 | `VisionClassificationStage` | 静止画 + 動画の文脈情報 | `vision_judgments` | ステージ6の完了後。実行方針と費用上限の範囲内で |
+| 8 | `GameSegmenter` + `GameResolver` | メタデータ、画像判定の結果、別名辞書 | `game_segments` | ステージ3・7の完了後。別名辞書や集約ルールを変えたときにも再実行 |
+| 9 | `DatasetExporter` | `messages` + `game_segments` + 各ディメンション | `Dataset/vYYYYMMDD/` | 手動 |
 
 ### 4.1 動画の状態遷移
 
-```mermaid
-stateDiagram-v2
-  [*] --> DISCOVERED
-  DISCOVERED --> UPCOMING: scheduled
-  DISCOVERED --> ENDED: already finished
-  UPCOMING --> LIVE
-  LIVE --> ENDED
-  ENDED --> CHAT_FETCHED: replay downloaded
-  LIVE --> CHAT_FETCHED: live capture finished and no replay
-  CHAT_FETCHED --> NORMALIZED
-  NORMALIZED --> ATTRIBUTED
-  ENDED --> UNAVAILABLE: private / deleted / no replay
-  DISCOVERED --> SKIPPED: not a game stream / members-only
-```
+`DISCOVERED → UPCOMING → LIVE → ENDED → CHAT_FETCHED → NORMALIZED → ATTRIBUTED` と遷移します。途中で外れる状態として `UNAVAILABLE`(非公開・削除・リプレイなし)と `SKIPPED`(ゲーム配信でない、メンバー限定)があります。状態の遷移とエラーは全て `collection_runs` に記録し、失敗した項目はバックオフを挟んでリトライします。
 
-状態が遷移するたびに、エラー内容と合わせて `collection_runs` に記録します。失敗した項目はバックオフを挟んでリトライします。
+静止画の取得と画像判定は、この直線的な状態遷移には含めません。`collection_runs` で別のステージ実行として管理し、チャット系の処理と並行して進めます。動画が `ATTRIBUTED` に進むときに画像判定の完了を待つのは、実行方針(5.4節)でその動画に画像判定が必要とされている場合だけです。
+
+### 4.2 チャンネル選定方針(統一された包含基準)
+
+**原則:** 候補を*どうやって見つけたか*で、*含めるかどうか*を決めてはいけません。候補はどの探索元から来てもかまいませんが、全ての候補を同じ手順で測定し、同じ閾値で判定します。全ての基準を満たしたチャンネルだけを収集します。これにより母集団が明確に定義され、そのバイアスも記録・測定できるものになります。
+
+**母集団の定義。** 「日本のゲーム配信者」を、**ゲームを定期的にライブ配信していて**、**一定以上の規模がある**、**日本語の**YouTubeチャンネルと操作的に定義します。国籍や居住地は観測できないため使いません。チャンネルの `country` 欄は自己申告で空欄も多いため、記録はしますが基準には使いません。
+
+**基準。** 以下の値は提案した既定値で、確定が必要です。いずれも、基準日で終わる観測期間の中で測定します。
+
+| ID | 基準 | 測定方法 | 既定の閾値 |
+| --- | --- | --- | --- |
+| C1 | 日本語 | 期間内のライブ配信タイトルのうち、かな(ひらがな・カタカナ)を含むものの割合 | 80%以上 |
+| C2 | ゲーム配信の活動量 | 期間内に終了した公開ライブ配信のうち、ゲーム配信の本数(`categoryId = 20`、ゲームカードあり、またはタイトルからゲームが解決できたもの) | 180日間で8本以上 |
+| C3 | ゲーム配信の割合 | 期間内のゲーム配信の本数 ÷ 終了したライブ配信の全本数 | 30%以上 |
+| C4 | 規模 | 基準日時点で `channels.list` から取得した `subscriberCount`。登録者数を非公開にしているチャンネルは不合格 | 1万人以上 |
+| C5 | チャットの取得可能性 | 期間内のゲーム配信のうち、チャットリプレイが利用できるものの割合 | 50%以上 |
+| C6 | チャンネルの種類 | 企業・パブリッシャー・eスポーツチームの公式チャンネルでない。切り抜き・転載・まとめチャンネルでない。`madeForKids`(チャットが無効になる)でない | 必須 |
+
+C1〜C5 はAPIのデータから自動で算出します。C6 は機械では確実に判定できません。そこで、自動のシグナル(例: `madeForKids`、チャンネル名の「切り抜き」などの語)で不合格の疑いがあるものに印を付け、短いチェックリスト(`Docs/ChannelTypeChecklist.md`、今後作成)に沿って人が確認します。判定内容と確認者は記録に残します。
+
+**候補の探索(標本抽出の枠)。** 全ての探索元は同じ候補テーブルに流し込みます。各候補にはどの探索元で見つかったかを記録し、後から探索元によるバイアスを分析できるようにします。
+
+- `ApiSearchCandidateSource`: Data API `search.list`(`type=video`, `eventType=completed`, `videoCategoryId=20`, `relevanceLanguage=ja`, `regionCode=JP`)を、時間窓と固定の検索語リストの組み合わせで実行します。最も中立な枠ですが、1回の呼び出しに100 unitかかるため、決まった日次予算の中で実行します。
+- `CsvCandidateSource`: 事務所の所属タレント一覧などのキュレーションしたリストを、`Config/ChannelCandidates.csv` から読み込みます。
+- `CollabSnowballCandidateSource`: 採用済みチャンネルの配信概要欄でリンクや@メンションされているチャンネルを候補にします。
+
+**評価とバージョン管理。**
+
+- 閾値・観測期間の長さ・検索語は `Config/ChannelPolicy.yaml` に置き、`policy_version` を付けます。内容を変えたら新しいバージョンにします。
+- `ChannelEligibilityEvaluator` は、候補1件・評価1回ごとに `channel_eligibility` に1行を保存します。内容は `(channel_id, policy_version, reference_date, metrics_json, passed, failed_criteria)` です。
+- 候補1件の評価にかかるのは約10 unitです(`channels.list` は50件ずつまとめて呼び、観測期間の分を `playlistItems.list` と `videos.list` で取得)。候補1,000件で、既定クォータのほぼ1日分になります。
+- **データセットのバージョンごとにコホートを固定します。** 各データセットのバージョンでは、評価を1つ(`policy_version` + `reference_date`)に固定します。その評価で合格したチャンネルがコホートになり、配信の出力はコホートのチャンネルに限ります。基準日より後に評価されたチャンネルは、次のデータセットのバージョンを作るまでコホートに加わりません。`MANIFEST.json` には方針バージョン・基準日・コホートの規模を記録し、評価表は `channel_eligibility.parquet` として出力します。
+- **例外の扱い。** 基準を満たさないチャンネルを手動で*追加*することは禁止します。手動での*除外*は、記録に残せる理由(例: 削除依頼)がある場合に限って認め、理由と合わせて記録します。これにより、除外も報告の対象にできます。
+- `Config/Channels.csv` には、チャンネルのキュレーション済み**属性**(`group_name`、`is_vtuber`、`tags`)だけを置きます。このファイルで包含を決めることはしません。
+
+### 4.3 Data APIクォータと取得の優先度ルール
+
+Data API のクォータは既定で1日 10,000 unit で、**太平洋時間の0時にリセットされます**(日本時間では夏時間に応じて16時または17時)。そのため、全てのAPI呼び出しを1つの `ApiScheduler` に通します。スケジューラは1日の予算を**レーン**に分けて使い、各レーンの中では明示した**優先度ルール**で作業を並べます。Data APIを使わない処理(RSS、チャットリプレイ、静止画、OpenAI)は、この予算の対象外です。
+
+**常に適用するクォータ節約策。**
+
+- 新着の検出はRSSで行う(クォータを消費しない)
+- アップロード再生リストのIDは、APIで取得せずにチャンネルIDから導出する(`UC…` → `UU…`)
+- `videos.list` と `channels.list` は、常に1回あたり50件をまとめて呼ぶ
+- メソッドごとのコストは `Config/ApiCosts.yaml` に定義し、全ての呼び出しで実際の消費量を記録する
+- 既定では、ライブチャットを `liveChatMessages.list` で取得しない
+
+**レーン(1日の予算の配分)。** 既定の配分は `Config/ApiQuota.yaml` で設定します。各レーンには配分の分を保証します。決まった時刻(既定: リセットの4時間前)までに使われなかった配分は、クォータを無駄にしないよう、レーンの順番に従って残りのレーンへ回します。安全のための予備(既定5%)は、自動では使いません。
+
+| レーン | 既定の配分 | 作業内容 | この順位の理由 |
+| --- | --- | --- | --- |
+| L1 運用 | 30% | コホートのチャンネルの新着動画に対する `videos.list`、予定開始前のライブ状態の確認、配信終了後のメタデータ再取得 | 時間に追われる作業で、逃すとデータを失う(再取得しなかったチャプター、始まらなかったライブ収集など) |
+| L2 バックフィル | 40% | コホートのチャンネルの過去配信に対する `playlistItems.list` + `videos.list` | 過去分のデータセットを作る。待たせてもよいが、均等に進めたい |
+| L3 適格性評価 | 20% | 候補チャンネルの C1〜C5 の測定(4.2節) | コホートを広げ、維持する |
+| L4 探索 | 5% | 新しい候補を探す `search.list`(1回100 unit) | 最も高価で、最も急がない |
+| 予備 | 5% | 手動作業や緊急時用 | |
+
+**各レーン内の優先度ルール。** ルールは並べ替え用のキーを作ります。同じ順位になった場合は `hash(channel_id + salt)` で決めます。これは再現可能な疑似乱数の順序です。登録者数や再生数のような人気の指標は、優先度には**決して使いません**。途中でクォータが尽きたときに、データセットが大手チャンネルに偏ってしまうからです。
+
+- **L1 運用:** (1) 15分以内に開始予定、または配信中のもの、(2) 配信終了から猶予時間が過ぎ、最後のメタデータ再取得が必要なもの、(3) 新しく検出した動画(検出の古い順)
+- **L2 バックフィル: 時間スライスのラウンドロビン。** 過去分は、新しい順に**時間スライス**(既定30日)ごとに取得します。スライス *k*(例: 30〜60日前)は、コホートの全チャンネルがスライス *k*−1 を終えてから始めます。同じスライスの中では、取得済みのゲーム配信時間が最も少ないチャンネルから処理します。こうすると、どの時点でクォータが尽きても、全チャンネルがほぼ同じ日付まで遡って揃います。後からコホートに加わったチャンネルは、まず現在のスライスに追いつくまで処理します。
+- **L3 適格性評価:** (1) 次のデータセットのバージョンに向けて再評価の時期が来たコホートのチャンネル、(2) 新しい候補。1つの探索元が枠を占めないよう、**探索元をラウンドロビンで**回し、探索元の中はハッシュ順にする、(3) 以前に不合格だった候補。変わりにくい基準(C1 言語、C6 チャンネルの種類)で不合格だった候補は、待機期間(既定180日)を置いてから再評価します。変わりうる基準(C2〜C5)で不合格だった候補の待機期間は、それより短くします(既定60日)。
+- **L4 探索:** 検索語 × 時間窓を、`Config/ChannelPolicy.yaml` で定めた固定の順序でラウンドロビンします。これにより、毎周期の探索の枠が同じになります。まだ一度も検索していない時間窓を優先します。
+
+**クォータが尽きたときの扱い。**
+
+- `QuotaBudget` は、レーンの残り予算を超える作業を受け付けません。その作業は、優先度を変えずにキューに残ります。
+- それでもAPIが `quotaExceeded` を返した場合は、太平洋時間の次のリセットまで、APIを使う全てのレーンを止めます。APIを使わないステージは動き続けます。
+- `collector status` で、レーンごとの当日の消費量、レーンごとのキューの長さ、チャンネルごとのバックフィルの到達スライスを表示します。
+
+**データ。** 作業項目は `api_work_items`(`lane`, `kind`, `payload`, `priority_key`, `estimated_cost`, `status`)に、消費量は `quota_usage`(`pt_date`, `lane`, `units`)に保存します。キューを永続化しているため、再起動しても優先度は失われず、どの順番で収集したかを後から監査できます。
 
 ## 5. ゲームの紐づけ
 
-本システムの中核部分です。1回の配信で複数のゲームを遊ぶことがあるため、ラベル付けの単位は動画ではなく**セグメント**(`video_id`, `start_ms`, `end_ms`)とします。
+1回の配信で複数のゲームを遊ぶことがあるため、ラベル付けの単位は**セグメント**(`video_id`, `start_ms`, `end_ms`)とします。
 
 ### 5.1 根拠となる情報源(優先度の高い順)
 
-| 優先度 | 情報源(`AttributionSource`) | 粒度 | 一般的な信頼性 |
+| 優先度 | 情報源 | 粒度 | 一般的な信頼性 |
 | --- | --- | --- | --- |
 | 1 | `MANUAL`: 人手によるアノテーション | セグメント | 正解データ |
-| 2 | `CHAPTER`: 概要欄のタイムスタンプ(例: `1:02:03 マリオカート8DX`)を別名辞書で解決したもの | セグメント | ある場合は高い |
-| 3 | `GAME_CARD`: YouTubeのゲームカード(トピックチャンネルID) | 動画全体 | 高いが、1動画につき1ゲームしか設定できない |
-| 4 | `TITLE`: 括弧やハッシュタグの解析結果(例: `【#マイクラ】`、`【APEX】`)を別名辞書で解決したもの | 動画全体 | 中程度 |
-| 5 | `MODEL`(将来): 映像フレームまたはチャットの分類器 | セグメント | モデル次第 |
+| 2 | `CHAPTER`: 概要欄のチャプターを別名辞書で解決したもの | セグメント | ある場合は高い |
+| 3 | `VISION`: 間引いた静止画をOpenAIの画像対応モデルで判定したもの(5.4節) | 30分ビン | ゲーム中かどうかの判別は中〜高。ゲームの特定が確かなのは、主に候補と一致した場合 |
+| 4 | `GAME_CARD`: YouTubeのゲームカード | 動画全体 | 高いが、1動画につき1ゲームしか設定できない |
+| 5 | `TITLE`: 括弧やハッシュタグの解析結果 | 動画全体 | 中程度 |
+
+**いつ**ゲームをしていたか(区間の境界)と、**どの**ゲームか(ゲームの特定)は、別々の問いとして扱います。両者は異なる情報源から得てもかまいません。たとえば、画像判定でゲーム中のビンを見つけ、ゲームの特定はゲームカードから得る、という組み合わせです。各セグメントには、境界の情報源を `source` に、`game_id` の情報源を `identity_source` に記録します。
 
 ### 5.2 解決ルール
 
 1. `MANUAL` のセグメントがあれば、それをそのまま採用する。
-2. チャプターから1つ以上のゲームが解決できた場合は、チャプターを基にセグメントを作る。ゲームに解決できなかったチャプター(例: `雑談`、`エンディング`)は `NON_GAME` セグメントにする。
-3. それ以外でゲームカードがある場合は、動画全体を1つのセグメントにし、情報源を `GAME_CARD` とする。
-4. それ以外の場合は、タイトルやハッシュタグの一致結果を動画全体に適用する。
-5. 情報源同士が食い違う場合(例: カードはA、タイトルはB)は、優先度の高い方を採用し、`has_conflict = true` を立てて確認対象にする。
-6. 根拠が全くない動画には、`UNKNOWN` セグメントを1つ付ける。カタログには残すが、標準の出力からは除外する。
-
-全てのセグメントに `source`・`confidence`・`resolver_version`・`evidence`(一致した元の文字列)を保存します。これにより、紐づけの品質に応じてデータセットを絞り込めます。
+2. チャプターから1つ以上のゲームが解決できた場合は、チャプターを基にセグメントを作る。ゲームに解決できなかったチャプター(例: `雑談`、`エンディング`)は `NON_GAME` にする。
+3. それ以外で画像判定のビンがある場合は、ビンを基にセグメントを作る。各ビンは `GAME`・`NON_GAME`・`UNKNOWN` のいずれかになる。`GAME` のビンは、画像判定で一致したゲームを `game_id` にする。画像判定でゲーム中だとわかったがゲームを特定できなかったビンは、ゲームカード、それもなければタイトルからゲームを補い、どちらを使ったかを `identity_source` に記録する。隣り合うビンで、ラベルとゲームが同じものは1つにまとめる。
+4. それ以外でゲームカードがある場合は、動画全体を1つのセグメントにする。
+5. それ以外の場合は、タイトルやハッシュタグの一致結果を動画全体に適用する。
+6. 情報源同士が食い違う場合は、優先度の高い方を採用し、`has_conflict = true` を立てる。画像判定は、チャプターから作ったセグメントの検算にも使う。重なるビンが別のゲームを高い信頼度で示していたら、そのチャプターのセグメントに印を付ける。
+7. 根拠が全くない動画には、`UNKNOWN` セグメントを1つ付ける。カタログには残すが、標準の出力からは除外する。
 
 ### 5.3 ゲームの同一性と別名
 
-- `games` テーブルは、正規ゲーム1つにつき1行です。内部ID `game_id` に加え、任意で外部ID(YouTubeゲームトピックチャンネルID、IGDB ID、Wikidata QID)を持ちます。
-- `game_aliases` は表記を `game_id` に対応づけます(例: `マイクラ`、`Minecraft`、`MC`、`マインクラフト`)。照合の前に、NFKC正規化、大文字小文字の統一、`#`・`【】`・空白の除去を行います。
-- 別名辞書は段階的に育てていきます。
-  1. ゲームカードを観測するたびに、表示された(日本語の)タイトルと共にゲームを追加する。
-  2. 未解決のまま頻出するタイトル中の語を確認レポート(`unresolved_tokens`)に一覧化し、人手で整備する。
-  3. 任意の拡充ステップとして、IGDBやWikidataから日本語名・英語名を取り込む。
-- 別名辞書はバージョン管理します。辞書を変更したときに再実行するのはステージ6だけです。
+- `games` テーブルは、正規ゲーム1つにつき1行です。外部ID(YouTubeトピックチャンネル、IGDB、Wikidata)と、属性(ジャンル、プラットフォーム、発売年、発売元、マルチプレイかどうか)を持ちます。
+- `game_aliases` は表記を `game_id` に対応づけます。照合の前に、NFKC正規化、大文字小文字の統一、記号の除去を行います。
+- 別名辞書は、観測したゲームカード、未解決トークンのレポート(`unresolved_tokens`)の人手整備、IGDB・Wikidataからの取り込み、の3つで段階的に育てます。辞書を変更したときに再実行するのはステージ8だけです。
+
+### 5.4 画像判定によるおおまかな区間分割(30分ビン)
+
+この処理は、間引いて取得した静止画と、OpenAIの安価な画像対応モデルを使います。配信者が**いつ**実際にゲームをしているか(待機画面・雑談・エンディングとの区別)と、それが**どの**ゲームかを判定します。チャプターのない多くの配信では、これが区間の境界の主な情報源になります。
+
+**ビン。** 動画の `[0, duration)` を、`VISION_BIN_MS`(既定30分)ごとのビンに分けます。最後のビンが5分未満になる場合は、1つ前のビンに統合します。
+
+**静止画の取得。** 各ビンから `VISION_FRAMES_PER_BIN` 枚(既定3枚)を、ビンの1/6・3/6・5/6の位置(5分・15分・25分)で取得します。配信は待機画面から始まることが多いため、ビンの開始直後は避けます。
+
+- `FfmpegFrameSampler`(既定): `yt-dlp` で約480pの映像のみのURLを解決し、`ffmpeg` でその時刻にシークして(`-ss` を `-i` の前に置く)1枚を保存します。
+- `StoryboardFrameSampler`(代替): ストーリーボードのスプライト画像から該当コマを切り出します。画像は小さいものの、取得のコストはほとんどかかりません。
+- 静止画は長辺512〜768pxに縮小し、`Raw/Frames/{video_id}/{offset_ms}.jpg` に保存します。
+
+**判定。** 各ビンは、そのビンの全ての静止画を入れた**1回のリクエスト**で判定します(`detail: "low"`)。モデルは静止画1枚ごとに判定結果を返します。画像のほかに、次の文脈情報をモデルに渡します。
+
+- 動画のタイトルとチャンネル名
+- ゲームカードがあれば、そのタイトル
+- **候補リスト**: ゲームカード、タイトル中の語、チャプター、そのチャンネルが最近遊んだゲームから集めたもの。各候補に `candidate_id`、`title_ja`、`title_en` を付ける
+
+候補の中から選ばせる方が、何のゲームかを自由に答えさせるよりはるかに正確です。特に知名度の低いゲームで差が出ます。出力はJSONスキーマで強制します(Structured Outputs)。
+
+```json
+{
+  "frames": [
+    {
+      "offset_ms": 300000,
+      "scene_type": "GAMEPLAY | GAME_MENU_OR_LOADING | WAITING_SCREEN | TALKING_NO_GAME | ENDING_OR_CREDITS | OTHER",
+      "candidate_id": "g_0012 or null",
+      "free_text_title": "string or null",
+      "confidence": 0.0
+    }
+  ]
+}
+```
+
+`candidate_id` が null のときは、`free_text_title` を `GameResolver` で解決します。それでも解決できなかったタイトルは `unresolved_tokens` のレポートに回します。
+
+**集約(`BinAggregator`)。**
+
+- `scene_type` が `GAMEPLAY` または `GAME_MENU_OR_LOADING` の静止画を、ゲーム中とみなす。
+- ビンの中でゲーム中の静止画が ⌈K/2⌉ 枚以上あれば、そのビンを `GAME` とする。`game_id` は、ゲーム中の静止画で最も多かったゲームにする。ゲーム中でない静止画が過半数なら `NON_GAME`、それ以外は `UNKNOWN` とする。
+- ビンの信頼度 = ビンのラベルと一致した静止画の割合 × モデルが返した信頼度の平均。
+- 集約は、保存済みの判定結果に対する純粋なオフライン処理である。`VISION_BIN_MS` をサンプリング間隔の倍数に変えたり、多数決のルールを変えたりしても、APIを呼び直す必要はない。
+
+**モデルと費用の管理。**
+
+- モデルは `.env` の `OPENAI_VISION_MODEL` で指定します(画像に対応した最も安い価格帯。nano や mini クラスなど)。Phase 0 のスパイクで、人手でラベルを付けたサンプルを使って2つの候補を比べて決めます。全ての判定結果に `model` と `prompt_version` を保存します。
+- リクエスト数は、動画1本あたり約 `ceil(配信時間 / 30分)` 回です。たとえば1,000配信時間なら、約2,000リクエスト・低解像度の画像約6,000枚になります。
+- 紐づけは急ぐ処理ではないため、既定では **Batch API** を使います。同期呼び出しはデバッグ用に残します。
+- キャッシュのキーは `(video_id, offset_ms, model, prompt_version)` で、キャッシュ済みのキーをAPIに再送信することはありません。
+- 実行方針 `VISION_RUN_POLICY` は、`always`(既定。チャプターやゲームカードの検算にもなる)と `no_chapters`(ゲームのチャプターがない動画だけ)のどちらかです。
+- 費用の上限は `VISION_DAILY_BUDGET_USD` で設定します。`CostTracker` が、APIが返したトークン使用量と設定ファイルの価格表から費用を見積もります。
+
+**既知の限界。**
+
+- 30分ビンなので、ビンの途中でゲームが切り替わると、多い方のゲームとして扱われます。セグメント境界の近くのメッセージは、最大で約±15分ずれてラベル付けされる可能性があります。厳密な分析では、`attribution_confidence` を使うか、画像判定による境界からX分以内のメッセージを除外してください。
+- VTuberのアバターの重ね表示、顔カメラ、画面の中に小さく映したゲーム画面は、モデルを惑わせることがあります。
+- アーカイブはライブで流れた内容と異なる場合があります(ミュートやカットされた箇所など)。編集されたアーカイブでは、静止画の時刻とチャットの時刻が正確に一致しないことがあります。
 
 ## 6. データモデル
 
 ### 6.1 カタログ(SQLite)
 
-ER図は[英語版](SystemDesign.md#61-catalog-sqlite)と同じです。主なテーブルは次のとおりです。
+ER図は英語版6.1節を参照してください。主なテーブルは次のとおりです。
 
-- `channels`: チャンネルID、名称、国、選定理由、有効フラグ
-- `videos`: 動画ID、チャンネル、タイトル、概要欄、状態、予定/実際の開始・終了時刻、カテゴリ、ゲームカード(トピックチャンネルID・タイトル)、リプレイ有無、取得モード
-- `games` / `game_aliases`: 正規ゲームと別名辞書
-- `game_segments`: `video_id`, `start_ms`, `end_ms`, `game_id`, `label_type`(`GAME`/`NON_GAME`/`UNKNOWN`), `source`, `confidence`, `has_conflict`, `evidence`, `resolver_version`
-- `collection_runs`: ステージ実行ログ(ステータス、エラー、時刻)
-- `raw_artifacts`: 生ファイルのパス、種類、SHA-256、取得日時
+- `channel_candidates` / `channel_eligibility` / `channels`: 候補、適格性評価の結果、採用されたチャンネル。`channels` は、グループ、VTuberかどうか、登録者数のスナップショット、タグ、方針バージョンを持つ
+- `videos`、`games`、`game_aliases`、`game_segments`(`source`・`identity_source` を含む)
+- `frames`、`vision_judgments`: 静止画と画像判定の結果(モデル、プロンプトのバージョン、トークン数を含む)
+- `api_work_items`、`quota_usage`: APIの作業キューと、太平洋時間の日付ごと・レーンごとのクォータ消費量
+- `collection_runs`、`raw_artifacts`
 
 ### 6.2 正規化メッセージ(Parquet)
 
 | カラム | 型 | 備考 |
 | --- | --- | --- |
-| `message_id` | string | YouTubeのメッセージID(重複排除キー) |
+| `message_id` | string | 重複排除キー |
 | `video_id` | string | |
 | `video_offset_ms` | int64 | 動画先頭からの経過時間。セグメントとの結合に使う |
-| `posted_at` | timestamp (UTC) | `timestampUsec` から算出 |
-| `author_key` | string | 投稿者チャンネルIDのHMAC-SHA256。鍵は `.env` に置いた秘密値 |
+| `posted_at` | timestamp (UTC) | |
+| `author_key` | string | 投稿者チャンネルIDの鍵付きHMAC |
 | `message_type` | enum | `TEXT`, `SUPER_CHAT`, `SUPER_STICKER`, `MEMBERSHIP`, `GIFT`, `SYSTEM` |
-| `text` | string | プレーンテキスト。絵文字は `:shortcode:` に置換 |
-| `emoji_ids` | list<string> | メンバー限定のカスタム絵文字も含む |
+| `text` | string | 絵文字を `:shortcode:` に置換したもの |
+| `text_norm` | string | NFKC正規化・小文字化・繰り返し文字の圧縮(例: `wwwww` → `www`)をしたもの。キーワード検索に使う |
+| `tokens` | list<string> | SudachiPyによる形態素(正規化形)。語単位の検索や分析に使う |
+| `char_len`, `emoji_count` | int | 事前に計算したテキスト特徴量 |
+| `emoji_ids` | list<string> | |
 | `amount_micros`, `currency` | int64, string | スパチャのみ |
-| `is_member`, `member_months` | bool, int | バッジ情報から取得 |
-| `is_moderator`, `is_owner`, `is_verified` | bool | |
+| `is_member`, `member_months`, `is_moderator`, `is_owner`, `is_verified` | bool/int | |
 | `capture_mode` | enum | `REPLAY` または `LIVE` |
 
 ### 6.3 出力データセット
 
 `Dataset/vYYYYMMDD/` には次のファイルを出力します。
 
-- `messages_with_game.parquet`: メッセージとセグメントを、`video_id` が一致し `start_ms <= video_offset_ms < end_ms` となる条件で結合したもの。`game_id`、`label_type`、`attribution_source`、`attribution_confidence` が付く
-- `videos.parquet`、`channels.parquet`、`games.parquet`、`game_segments.parquet`
-- `MANIFEST.json`: コードのコミット、`resolver_version`、別名辞書のハッシュ、収集期間、行数
-- `DATASHEET.md`: データセットのデータシート(収集方法、フィルタ条件、既知のバイアス、ライセンス上の注意)
+- `Messages/year_month=YYYY-MM/*.parquet`: ファクトテーブル。メッセージとセグメントを結合したもので、`game_id`、`label_type`、`attribution_source`、`attribution_confidence` に加え、**非正規化した絞り込み用のキー**として `channel_id`、`segment_offset_ms`(セグメント開始からの経過時間)、`stream_offset_ratio`(配信内での位置。0〜1)を持つ。各ファイル内は `(game_id, channel_id, video_id, video_offset_ms)` の順に並べてあるため、ゲームやチャンネルで絞り込むときに、Parquetの統計情報で不要なデータを読み飛ばせる。
+- ディメンションテーブル: `videos`、`channels`、`games`、`game_aliases`、`game_segments` の各 `.parquet`
+- `channel_eligibility.parquet`: 評価した全ての候補(除外されたものを含む)について、各基準の測定値と判定結果。母集団の記述や、閾値を変えた感度分析に使える
+- `Dataset.duckdb`: Parquetに対する**ビューだけ**を持つDuckDBファイル(6.4節)。正となるデータはあくまでParquet
+- `MANIFEST.json`: コードのコミット、`resolver_version`、別名辞書のハッシュ、`policy_version` と基準日・コホートの規模、収集期間、行数
+- `DATASHEET.md`: データセットのデータシート(収集方法、既知のバイアス、ライセンス上の注意)
+
+### 6.4 分析用アクセス層
+
+データセットは**スタースキーマ**として設計します。メッセージがファクトテーブルで、チャンネル・動画・ゲーム・セグメントがディメンションです。そのため、どの絞り込み条件の組み合わせも1本のクエリで書けて、結合を手で書く必要がありません。
+
+**`Dataset.duckdb` に用意するビュー:**
+
+| ビュー | 内容 |
+| --- | --- |
+| `v_messages` | ファクトに全ディメンションを結合した、メッセージ1件1行の横長の表(ゲーム名の日英、ジャンル、チャンネルのグループなどを含む) |
+| `v_game_segments` | セグメントに、ゲーム・チャンネルの属性、区間の長さ、メッセージ数を付けたもの |
+| `v_game_stats` | ゲームごとの集計(配信数、チャンネル数、配信時間、メッセージ数、スパチャ金額) |
+| `v_channel_game_matrix` | チャンネル × ゲームの配信時間とメッセージ数 |
+
+**使える絞り込み条件(全て組み合わせ可能):**
+
+| 軸 | 条件 |
+| --- | --- |
+| ゲーム | `game_id`。任意の別名(`game_aliases` で解決するので、`マイクラ` でMinecraftが見つかる)。ジャンル、プラットフォーム、発売年。`label_type`(`NON_GAME` を指定すれば雑談区間だけを取り出せる)。`attribution_confidence` の下限、許可する `attribution_source`、`has_conflict` |
+| コメント | `message_type`(通常のコメント、スパチャ、メンバーシップなど)。キーワード(`text_norm` の部分一致、`tokens` の語の完全一致、正規表現)。絵文字ID。`author_key`(仮名化した同じ視聴者をチャンネルをまたいで追える)。メンバー・モデレーター・配信者本人のフラグ。スパチャ金額の範囲、文字数の範囲 |
+| チャンネル | `channel_id`、`group_name`、`is_vtuber`、登録者数の帯、`tags` |
+| 時間 | 投稿日の範囲。`segment_offset_ms` の範囲(例: 各ゲームの最初の10分だけ)。`stream_offset_ratio` の範囲 |
+
+**インターフェース:**
+
+- **Python:** `DatasetQuery` は、DuckDBの上に作るメソッドチェーン形式の不変なフィルタビルダーです。結果はDuckDBのリレーションとして返し、pandas・polarsへの変換やParquet・CSVへの書き出しができます。
+
+  ```python
+  df = (
+      DatasetQuery.open("Dataset/v20261201")
+      .games(aliases=["マイクラ"], min_confidence=0.6)
+      .channels(groups=["GroupA"], is_vtuber=True)
+      .comments(types=["TEXT"], keywords=["草"])
+      .to_polars()
+  )
+  ```
+
+- **CLI:** `collector query` で、同じ条件をオプションとして指定できます(例: `--game マイクラ --group GroupA --type SUPER_CHAT --keyword 草 --min-confidence 0.6 --out result.parquet`)。
+- **保存したフィルタ:** クエリを `Config/Queries/` にYAMLとして保存し、`collector query --preset <name>` で実行できます。全てのクエリ出力には、データセットのバージョンと、解決後の絞り込み条件を書いた小さなマニフェストを付けます。これにより、分析を正確に再現できます。
+- **SQL:** 上級者は `Dataset.duckdb` を直接開いて使えます。
+
+**設計上のポイント:**
+
+- `DatasetQuery` は、型付きのフィルタオブジェクト(`GameFilter`, `CommentFilter`, `ChannelFilter`, `TimeFilter`)からSQLを組み立てることだけを担当します。フィルタオブジェクトは1つの軸だけに責任を持つので、新しい軸を追加しても他の軸に影響しません。
+- 別名やジャンルの条件は、先に `game_id` の集合へ解決します。そのため、巨大なファクトテーブルは常に、索引が効いて並べ替え済みのキーで絞り込まれます。
+- チャンネルの属性(`group_name`、`is_vtuber`、`tags`)は、キュレーションしてバージョン管理している `Config/Channels.csv` から取ります。`subscriber_count` は `channels.list` から取得した、日付付きのスナップショットです。
+- ゲームの属性(ジャンル、プラットフォーム、発売年)は、IGDB・Wikidataからの拡充で埋めます。拡充を実装するまでは、`Config/GameAttributes.csv` に手で入力できます。
 
 ## 7. クラス設計
 
-クラス図は[英語版](SystemDesign.md#7-class-design)を参照してください。設計上のポイント(SOLID)は次のとおりです。
+クラス図は英語版7章を参照してください。設計上のポイント(SOLID)は次のとおりです。
 
-- **開放閉鎖原則。** 映像分類器のような新しい紐づけシグナルは、`EvidenceExtractor` の実装を1つ追加するだけで導入できる。`GameSegmenter` の統合ルールは変えない。
-- **依存性逆転の原則。** `ChatCollector` は `ChatSource` インターフェースに依存する。そのため `yt-dlp` から `chat-downloader`(または公式API)への切り替えは設定の変更で済む。
-- **単一責任の原則。** 取得(ネットワーク)、正規化(純粋な変換)、紐づけ(メタデータに対する純粋なロジック)を分離する。これにより、後の2つはフィクスチャで容易に単体テストできる。
+- **開放閉鎖原則。** 画像判定は、`EvidenceExtractor` の実装の1つにすぎません。`GameSegmenter` の統合ルールは情報源の優先度に対して汎用的に作るため、今後シグナルを追加しても(例: チャットのキーワードを使うモデル)ルールは変わりません。チャンネルの基準(`EligibilityCriterion`)、候補の探索元(`CandidateSource`)、レーンの優先度(`PriorityRule`)、絞り込み条件(`QueryFilter`)も、同じ考え方で差し替え・追加できるようにします。
+- **依存性逆転の原則。** `ChatSource`・`FrameSampler`・`VisionClassifier` はインターフェースとして定義します。そのため、チャット取得ツール、静止画の取得方法、モデルの提供元は、設定を変えるだけで切り替えられます。
+- **費用のかかる処理の分離。** お金がかかるのは `VisionClassificationStage` だけです。判定結果はストレージに書き込み、`VisionEvidenceExtractor` は保存済みの結果を読むだけにします。そのため、紐づけの再実行は常に無料です。同じように、Data API を呼ぶのは `ApiScheduler` だけです。
 
 ## 8. シーケンス
 
-シーケンス図は[英語版](SystemDesign.md#8-sequences)を参照してください。
+シーケンス図は英語版8章を参照してください。
 
-- **アーカイブ収集(主経路)。** 10分ごとにRSSで新着を検出 → `videos.list` とゲームカードでメタデータを取得 → 配信終了から2時間以上経ってからリプレイチャットを取得 → 正規化 → 紐づけ。
-- **ライブ収集(アーカイブを消すチャンネル向けの補助経路)。** 予定開始時刻が近づいたら状態を監視し、配信中は配信1本につき1つのワーカーでチャットを逐次保存する。後でリプレイが取得できた場合は、`message_id` で重複を除いて統合する。ワーカーは配信の間ずっと動かし続ける必要があるため、ライブ収集はチャンネルごとに有効化する(`channels.capture_live`)。
+- **アーカイブ収集。** RSSで新着を検出し、L1レーンでメタデータを取得します。配信終了から猶予時間が経ったら、チャットリプレイの取得と正規化を行い、それと並行して静止画を取得します。次に Batch API で画像を判定し、最後に紐づけを行います。
+- **ライブ収集。** アーカイブを消すチャンネル向けに、配信1本につき1つのワーカーを動かしてチャットを逐次保存します。後でリプレイが取得できた場合は、`message_id` で重複を除いて統合します。
 
 ## 9. ストレージ構成
 
@@ -229,75 +348,83 @@ ER図は[英語版](SystemDesign.md#61-catalog-sqlite)と同じです。主な�
 Data/
   Catalog.sqlite
   Raw/
-    Api/{video_id}/{fetched_at}.json.gz
-    WatchPage/{video_id}/{fetched_at}.json.gz   # 抽出した ytInitialData のみ
-    Chat/{video_id}/{capture_mode}.jsonl.gz
-  Normalized/
-    Messages/video_id={video_id}/part-0.parquet
-Dataset/
-  vYYYYMMDD/...
+    Api/ WatchPage/ Chat/
+    Frames/{video_id}/{offset_ms}.jpg
+    Vision/{video_id}/{model}_{prompt_version}/{bin_start_ms}.json
+  Normalized/Messages/video_id={video_id}/part-0.parquet
+Dataset/vYYYYMMDD/...
 Config/
-  Channels.csv
+  ChannelPolicy.yaml      # 包含基準・観測期間・検索語
+  ApiQuota.yaml           # レーン配分・配分を回す時刻・予備・待機期間
+  ApiCosts.yaml
+  ChannelCandidates.csv
+  Channels.csv            # キュレーションした属性のみ
   GameAliases.csv
+  GameAttributes.csv
+  VisionPrompt.md
+  ModelPrices.yaml
+  Queries/*.yaml
 ```
 
-`Data/` と `Dataset/` はgit管理外とします。`Config/` はバージョン管理し、チャンネル選定と別名辞書を再現できるようにします。
-
-容量の目安: 人気配信では1時間あたり約5千〜3万件のメッセージがあります。生のJSONは1件あたり平均約1KB(gzip圧縮後で約100B)なので、1,000配信時間ぶんの生チャットで約1〜3GBになります。
+`Data/` と `Dataset/` はgit管理外とし、`Config/` はバージョン管理します。
 
 ## 10. 運用
 
-- **スケジューリング。** 内部スケジューラ(APScheduler)を持つ常駐プロセス(`collector daemon`)で動かすか、単発のCLIをWindowsタスクスケジューラやcronに登録する。各ステージは1回の起動(tick)ごとに上限件数までを処理する。
-- **クォータ。** `QuotaTracker` が日ごとの消費unit数をカタログDBに記録し、設定した上限(既定 8,000)に達したらAPI呼び出しを止める。新着検出はRSSで行うため、定常時のAPI消費は1 tickあたりおおよそ `ceil(動画数/50)` unitで済む。
-- **アクセスの節度。** 視聴ページとチャットへのリクエストには、ジッター付きのレート制限をかける(既定: 全体で毎秒1リクエストまで)。HTTP 429や5xxが返ったら指数バックオフする。
-- **猶予時間。** アーカイブ処理の完了を待つため、チャットリプレイの取得は `actualEndTime` から2時間以上経ってから行う。配信後にチャプターが追記されることが多いため、メタデータもこのときに再取得する。
-- **紐づけの再実行。** 別名辞書やリゾルバを変更したら、`collector attribute --all` でステージ6を再実行する。ネットワークへのアクセスは不要。
-- **可観測性。** `collector status` で、状態ごとの件数、直近の失敗、当日のクォータ消費、未解決トークンの上位を表示する。
+- **スケジューリング。** 常駐プロセス(APScheduler)で動かすか、単発のCLIをタスクスケジューラに登録します。
+- **クォータ。** Data API の呼び出しは全て `ApiScheduler` と `QuotaBudget` を通し、4.3節のレーンと優先度ルールを適用します。日付はYouTubeのリセットに合わせて太平洋時間で数えます。
+- **アクセスの節度。** 視聴ページ・チャット・静止画の取得には、ジッター付きのレート制限をかけ、エラー時には指数バックオフします。
+- **猶予時間。** チャットリプレイと静止画の取得、メタデータの再取得は、配信終了から2時間以上経ってから行います。
+- **紐づけの再実行。** `collector attribute --all` は、ネットワークへのアクセスも有料APIの呼び出しもせずに実行できます。
+- **画像判定の費用。** `CostTracker` が日ごとの費用の見積もりを記録し、上限に達したら翌日まで新しい判定を投入しません。
+- **可観測性。** `collector status` で、状態ごとの件数、失敗、レーンごとのクォータ消費量とキューの長さ、バックフィルの進み具合、画像判定の費用、未解決トークンを表示します。
 
 ## 11. データ品質チェック
 
-- 配信時間に対してメッセージ数が少なすぎないか(ダウンロードが途中で切れていないかの検出)
-- 配信中に `video_offset_ms` がX分以上空いている箇所がないか
-- セグメントが `[0, duration)` を重複なく覆っているか
-- 出力ごとの `UNKNOWN` ラベルおよび `has_conflict` の割合
-- 人手でアノテーションした検証サンプル(例: 100動画)で情報源ごとの紐づけ精度を測り、`DATASHEET.md` に記載する
+- 配信時間に対してメッセージ数が少なすぎないか、チャットに時間の空白がないか
+- セグメントが動画全体を重複なく覆っているか
+- `UNKNOWN` と `has_conflict` の割合
+- 画像判定のビンが、チャプターやゲームカードとどれくらい一致しているか(モデルとプロンプトが劣化していないかの継続的な確認)
+- 人手でアノテーションした検証サンプルで、情報源ごとの精度を測る
 
 ## 12. 倫理・法務・プライバシー
 
-- 視聴ページやチャットリプレイからの取得は公式APIの範囲外であり、YouTube利用規約に抵触するおそれがあります。大規模に収集する前に、所属機関と法的根拠(例: 情報解析に関する著作権法第30条の4)を確認し、必要であれば倫理審査の承認を得てください。
-- 投稿者のチャンネルIDと表示名は、アクセスを制限した生データ層にだけ保持します。派生データ層では `author_key`(鍵付きHMAC。鍵は `.env` に置き、コミットしない)を使います。
-- データセットを公開する場合は、本文ではなく動画ID・メッセージIDと派生特徴量を共有するか、審査で承認された条件に従ってください。
-- メンバー限定・非公開・削除済みのコンテンツは収集しません。後から非公開になった動画にはフラグを立て、出力時に除外できるようにします(設定で切り替え可能)。
+- 視聴ページ・チャットリプレイ・映像からの取得は公式APIの範囲外で、YouTube利用規約に抵触するおそれがあります。大規模に収集する前に、所属機関と法的根拠(例: 著作権法第30条の4)を確認し、必要であれば倫理審査の承認を得てください。
+- 静止画はOpenAI APIに送信します。そのことが所属機関の審査上問題ないかを確認し、OpenAIの現行のAPIデータ利用・保持ポリシーも確認してください。静止画はアクセスを制限した生データ層にだけ保持し、公開するデータセットには含めません。
+- 投稿者のIDは生データ層にだけ保持し、派生データでは `author_key` を使います。
+- メンバー限定・非公開・削除済みのコンテンツは収集しません。
 
 ## 13. 技術スタック
 
 | 用途 | 採用技術 |
 | --- | --- |
-| 言語・パッケージ管理 | Python 3.12+、`uv`、厳格な型チェック(`mypy --strict` または `pyright` の strict モード)、`ruff`、`black` |
+| 言語・品質管理 | Python 3.12+、`uv`、厳格な型チェック、`ruff`、`black` |
 | CLI | `typer` |
-| YouTube API | `google-api-python-client` または `httpx` を直接使用 |
-| チャット取得 | `yt-dlp`(リプレイ)、`chat-downloader`(ライブ・リプレイ。代替手段) |
-| 視聴ページ解析 | `httpx` で取得し、`ytInitialData` のJSONを抽出 |
-| カタログDB | `SQLAlchemy` 2.x 経由のSQLite(将来PostgreSQLへ移行可能) |
-| 列指向データ | `pyarrow` / Parquet。分析と出力時の結合には `duckdb` |
+| YouTube | `google-api-python-client` または `httpx`、`yt-dlp`、`chat-downloader` |
+| 静止画 | `ffmpeg`、`Pillow` |
+| 画像判定 | `openai` SDK(Structured Outputs、Batch API) |
+| カタログDB | `SQLAlchemy` 2.x 経由のSQLite |
+| 列指向データ・クエリ | `pyarrow`、`duckdb`、`polars`(出力形式として任意) |
+| 日本語テキスト処理 | `SudachiPy` + `sudachidict_core` |
 | スケジューラ | `APScheduler` |
-| 設定・秘密情報 | `pydantic-settings` で `.env` を読み込む(`YOUTUBE_API_KEY`, `AUTHOR_HASH_SECRET`) |
-| テスト | `pytest`。記録済みのフィクスチャを使い、単体テストではネットワークに接続しない |
+| 設定・秘密情報 | `pydantic-settings` で `.env` を読み込む(`YOUTUBE_API_KEY`, `AUTHOR_HASH_SECRET`, `OPENAI_API_KEY`, `OPENAI_VISION_MODEL`, `VISION_*`) |
+| テスト | `pytest`。記録済みのフィクスチャを使う |
 
 ## 14. ソース構成案
-
-ディレクトリ名とファイル名は、`CLAUDE.md` の命名規則(UpperCamelCase)に従います。
 
 ```text
 Src/GameChatCollector/
   Cli.py
   Settings.py
-  Domain/            # データクラス: Channel, Video, GameSegment, Evidence ...
+  Domain/
   Sources/           # YouTubeApiClient, WatchPageScraper, RssClient, ChatSources
-  Stages/            # StreamDiscoverer, MetadataCollector, ChatCollector, ChatNormalizer, DatasetExporter
-  Attribution/       # EvidenceExtractors, GameResolver, GameSegmenter, TextNormalizer
-  Storage/           # CatalogRepository, RawStore, ParquetWriter
-  Operations/        # QuotaTracker, RateLimiter, Scheduler
+  Selection/         # CandidateSources, ChannelEligibilityEvaluator, EligibilityCriteria, ChannelPolicy
+  Stages/
+  Attribution/       # EvidenceExtractors, GameResolver, GameSegmenter
+  Vision/            # FrameSamplers, FrameCollector, VisionClassifiers, BinAggregator
+  Query/             # DatasetQuery, 各種フィルタ, プリセット
+  Text/              # TextFeatureExtractor
+  Storage/
+  Operations/        # ApiScheduler, QuotaBudget, PriorityRules, CostTracker, RateLimiter
 Tests/
 Config/
 Docs/
@@ -307,16 +434,18 @@ Docs/
 
 | フェーズ | 成果物 |
 | --- | --- |
-| 0. スパイク | 実際の配信約20本で、`ytInitialData` 内のゲームカードの位置、`yt-dlp` のチャットリプレイの形式とオフセット、チャプターの利用率を確認する。結果は `ResearchNotes/` に記録する |
-| 1. MVP(アーカイブ) | シードチャンネル → 新着検出 → メタデータ → リプレイチャット → 正規化 → `GAME_CARD`・`TITLE` による紐づけ → 出力 |
-| 2. セグメント化 | チャプター解析、別名辞書の整備フロー、未解決トークンのレポート、検証サンプル |
-| 3. ライブ収集 | アーカイブを削除するチャンネル向けの `LiveChatSource` ワーカー、リプレイとの重複排除 |
-| 4. 拡充 | IGDB / Wikidata との連携(ジャンル、発売年、プラットフォーム)、任意で映像ベースの分類器を `EvidenceExtractor` として追加 |
+| 0. スパイク | 約20本の配信で、ゲームカードの位置、チャットリプレイの形式、チャプターの利用率、アーカイブでの `ffmpeg` シークの可否を確認する。30分ビンに人手でラベルを付け、安価なOpenAIモデル2つを精度と配信1時間あたりの費用で比べる。結果は `ResearchNotes/` に記録する |
+| 1. MVP | チャンネル選定方針 v1(候補の探索元、C1〜C5の自動判定、C6のチェックリストによる確認) → コホート → 配信の検出(クォータのレーンと優先度ルール付き) → メタデータ → リプレイチャット → テキスト特徴量付きの正規化 → `GAME_CARD`・`TITLE` による紐づけ → スタースキーマでの出力とDuckDBのビュー → `DatasetQuery` と `collector query` |
+| 2. セグメント化 | 画像判定によるおおまかな区間分割、チャプター解析、別名辞書の整備フロー、検証サンプル |
+| 3. ライブ収集 | `LiveChatSource` のワーカー、リプレイとの重複排除 |
+| 4. 拡充 | IGDB・Wikidataとの連携。ゲームが切り替わったビンの中だけ静止画を細かく取り直し、境界を精密にする |
 
 ## 16. 未決事項
 
-1. **チャンネル選定。** 「日本の配信者」の定義をどうするか。選択肢は、キュレーションしたリスト(例: 事務所の所属タレント一覧)、`channels.country = JP`、日本語タイトルなど。サンプリングのバイアスに直結するため、決めた内容を記録する必要がある。
-2. **収集期間。** これから先の配信だけを対象にする(配信中・直近の配信)のか、過去分のバックフィルも含めるのか。
-3. **目標規模。** チャンネル数と配信時間をどれくらいにするか。SQLiteと単一マシンの構成で足りるかが、これで決まる。
+1. **チャンネル選定方針の閾値。** C1〜C6 の既定値(観測期間180日、ゲーム配信8本以上、ゲーム配信の割合30%以上、登録者1万人以上、チャットリプレイあり50%以上、かな入りタイトル80%以上)を確定または調整してください。また、クォータのコストを踏まえて、`search.list` による探索の枠を使うかどうかも決めてください。
+2. **収集期間とクォータ。** これから先の配信だけにするか、過去分も遡るか。遡る場合、どこまで遡るか。レーン配分の既定値(30/40/20/5、予備5%)でよいか。Googleにクォータの増枠を申請するか。
+3. **目標規模。** チャンネル数と配信時間をどれくらいにするか。
 4. **公開方針。** データセットを公開するか。公開する場合、どの形式にするか(IDのみか、本文も含めるか)。
-5. **アノテーション工数。** 検証用のセグメントアノテーションに、どれだけの人手の時間を割けるか。
+5. **アノテーション工数。** 検証用のアノテーションに、どれだけの人手の時間を割けるか。
+6. **チャンネルの属性。** グループ・VTuberかどうか・規模のほかに、分析に必要な属性はあるか(例: 性別表現、デビュー年)。属性ごとに `Config/Channels.csv` で整備する必要がある。
+7. **画像判定の予算。** OpenAIの月額の上限をいくらにするか。これで `VISION_RUN_POLICY` の既定値と、1ビンあたりの静止画の枚数を増やせるかが決まる。
