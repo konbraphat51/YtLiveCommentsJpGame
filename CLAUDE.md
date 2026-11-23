@@ -141,6 +141,10 @@ export default {
 =Claude can freely edit below this line. Use this area to share project knowledge throught different chat sessions. Capture conventions, structure, commands, and gotchas so that agents joining later stay consistent with existing decisions.=
 
 - Design source of truth: `Docs/SystemDesign.md` (ja: `Docs/SystemDesign.ja.md`). Status as of 2026-11-24: design only, no code yet.
-- Core concept: game attribution is per **segment** (`video_id`, `start_ms`, `end_ms`), merged from pluggable `EvidenceExtractor`s by priority MANUAL > CHAPTER > GAME_CARD > TITLE.
+- Core concept: game attribution is per **segment** (`video_id`, `start_ms`, `end_ms`), merged from pluggable `EvidenceExtractor`s by priority MANUAL > CHAPTER > VISION > GAME_CARD > TITLE. Segment boundaries (`source`) and game identity (`identity_source`) may come from different sources.
+- VISION = cheap OpenAI vision model on sampled frames (3 per 30-minute bin, Batch API, candidate-constrained JSON output). Only `VisionClassificationStage` makes paid calls, so re-attribution is always free.
+- Channel inclusion is decided only by the versioned criteria C1–C6 in `Config/ChannelPolicy.yaml` (Design §4.2). Discovery source never decides inclusion. No manual inclusion; manual exclusion only with a logged reason. Each dataset version uses one fixed cohort.
+- Every Data API call goes through `ApiScheduler`: lanes L1 Operational > L2 Backfill (time-sliced round-robin) > L3 Eligibility > L4 Discovery. The quota day is Pacific Time. Never prioritize by popularity (Design §4.3).
+- Export is a star schema plus DuckDB views; `DatasetQuery` filters by game / comment / channel / time (Design §6.4).
 - The Data API does not expose the game title; it comes from the watch-page game card (`ytInitialData`). Verify the parser in the Phase 0 spike before relying on it.
 - Planned package: `Src/GameChatCollector/` (UpperCamelCase dirs and files, following the naming rules).
