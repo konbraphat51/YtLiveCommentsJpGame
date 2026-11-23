@@ -139,3 +139,8 @@ export default {
 ## Claude Notes
 
 =Claude can freely edit below this line. Use this area to share project knowledge throught different chat sessions. Capture conventions, structure, commands, and gotchas so that agents joining later stay consistent with existing decisions.=
+
+- Design source of truth: `Docs/SystemDesign.md` (ja: `Docs/SystemDesign.ja.md`). Status as of 2026-11-24: design only, no code yet.
+- Core concept: game attribution is per **segment** (`video_id`, `start_ms`, `end_ms`), merged from pluggable `EvidenceExtractor`s by priority MANUAL > CHAPTER > GAME_CARD > TITLE.
+- The Data API does not expose the game title; it comes from the watch-page game card (`ytInitialData`). Verify the parser in the Phase 0 spike before relying on it.
+- Planned package: `Src/GameChatCollector/` (UpperCamelCase dirs and files, following the naming rules).
