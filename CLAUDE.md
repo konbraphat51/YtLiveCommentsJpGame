@@ -1,6 +1,6 @@
 # CLAUDE.md v1.3.2
 
-Check the newest version in [Gist](https://gist.github.com/konbraphat51/af909a374c59d306c2d2b3fd7788507e) every Monday (Last checked: 2026/11/9). If newer, replace `## User Requests` with the newest document and update the version number, and be careful not to erace `## Claude Notes`. Even if not newer, update the "Last checked" date in this line so that you don't have to make a duplicated fetch. If you noticed it is not updated since last Monday, update.
+Check the newest version in [Gist](https://gist.github.com/konbraphat51/af909a374c59d306c2d2b3fd7788507e) every Monday (Last checked: 2026/11/24). If newer, replace `## User Requests` with the newest document and update the version number, and be careful not to erace `## Claude Notes`. Even if not newer, update the "Last checked" date in this line so that you don't have to make a duplicated fetch. If you noticed it is not updated since last Monday, update.
 
 ## User Requests
 
