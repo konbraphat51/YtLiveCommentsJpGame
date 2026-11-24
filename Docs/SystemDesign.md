@@ -915,7 +915,7 @@ Docs/
 
 ## 16. Open Questions
 
-1. **Channel policy thresholds.** Confirm or adjust the default values of C1–C6 (section 4.2): the 180-day window, at least 8 game streams, a game share of at least 30%, at least 10,000 subscribers, chat replay for at least 50% of streams, and at least 80% kana titles. Also decide whether the `search.list` frame should be used at all, given its quota cost.
+1. **Channel policy.** Policy 1.0.0 is fixed and measured (ChannelPolicy.md section 8). Still open: the C4 threshold (the only one that changes the cohort much), whether C6 should be reviewed for every cohort channel, whether crane-game and pachinko streams count as games, and whether to add a roster CSV source so frame coverage can be estimated.
 2. **Time window and quota.** Is the dataset forward-looking only (live and recent), or does it include a historical backfill? How far back should backfill go? Are the default lane shares (30/40/20/5, plus a 5% reserve) acceptable, or should a quota increase be requested from Google?
 3. **Target scale.** How many channels and stream-hours? This decides whether SQLite and a single machine are enough.
 4. **Release policy.** Will the dataset be published, and if so, in what form (IDs only or text)?

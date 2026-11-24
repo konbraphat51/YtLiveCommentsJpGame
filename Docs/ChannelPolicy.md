@@ -154,7 +154,18 @@ See [Cohorts/Policy1.0.0_20261124/Summary.md](../Cohorts/Policy1.0.0_20261124/Su
 
 ### 8.1 Findings
 
-(Filled in after the run; see the summary file.)
+Run: 30 search points (3,000 units) and evaluation of every candidate (3,589 units, about 2.8 units per candidate on average and about 9.6 per measured candidate). The run used the `bootstrap` profile.
+
+- **Frame.** The 30 points returned 1,426 videos from **1,274 unique channels**. 904 were stopped by screening: 832 had fewer than 5,000 subscribers or a hidden count, 93 had no kana anywhere, and 1 was `madeForKids`. The remaining **370 were measured**.
+- **Result.** **253 channels pass C1–C4 and C6.** They are `PENDING` only because C5 has not been measured. 11 of them also wait for a C6 decision.
+- **C4 is the binding criterion.** Varying it changes the cohort most: 5k → 339, 10k → 253, 20k → 189, 50k → 132, 100k → 94. The cohort is roughly log-uniform in size. Analyses that depend on size should stratify by subscriber band (Nakandala et al. 2017).
+- **C1, C2 and C3 are robust.** C1 is bimodal: moving the cut anywhere between 0.5 and 0.9 changes the cohort by at most 3 channels (it drops to 210 only at 1.0). C2 between 4 and 16 changes it by at most 10. C3 between 0.1 and 0.3 changes it by 5. Because the search frame samples Gaming-category streams, these criteria mostly matter for candidates from other sources.
+- **Measured activity.** For measured channels, the medians are 108 live streams, 95 game streams and 298 game-stream hours per 180 days. These are high-frequency streamers, as expected from a frame that samples streams.
+
+### 8.2 Issues Found in the First List
+
+- **C6 keyword flags miss media channels and over-flag individuals.** Examples: `ファミ通ゲーム実況ch` (a media company) is not flagged, while `狩野英孝【公式チャンネル】` (an individual) is flagged because of `公式`. Options for 1.1.0 are to review every cohort channel against the checklist (about 250 decisions) instead of only flagged ones, or to extend the keyword lists. A full review is recommended, because keyword lists cannot be complete.
+- **Scope of "game".** The Gaming category also contains real-world prize crane games (`クレーンゲーム`) and pachinko/pachislot streams. Whether these count as games is a scope decision for the next policy version.
 
 ## 9. Known Limitations
 
