@@ -45,6 +45,10 @@ channel_type:
 
 # Candidate discovery frame by search.list (Docs/ChannelPolicy.md section 3).
 search_frame:
+  # Points lie in the last frame_days before the reference date; older videos drop out of search (Rieder et al. 2025).
+  frame_days: 28
+  # Point i uses query_terms[i mod n]; "" means no keyword. Varying terms is recommended over time slicing alone (Efstratiou 2025).
+  query_terms: ["", "配信", "実況", "ゲーム"]
   # Each point T searches completed Gaming live streams published in [T - lookback_hours, T), newest first.
   lookback_hours: 6
   # Hour of day (UTC) of point i is (i * hour_step) mod 24; the step must be coprime with 24.

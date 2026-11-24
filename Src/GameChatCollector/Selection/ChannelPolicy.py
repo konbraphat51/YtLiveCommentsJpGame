@@ -55,6 +55,8 @@ class SearchFrameSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    frame_days: int = Field(ge=1)
+    query_terms: tuple[str, ...]
     lookback_hours: int = Field(ge=1)
     hour_step: int = Field(ge=1)
     max_results: int = Field(ge=1, le=50)
