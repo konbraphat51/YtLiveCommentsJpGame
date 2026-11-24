@@ -16,9 +16,12 @@ from GameChatCollector.Selection.CandidateSources import CsvCandidateSource
 from GameChatCollector.Selection.ChannelEligibilityEvaluator import ChannelEligibilityEvaluator
 from GameChatCollector.Selection.ChannelPolicy import ChannelPolicy
 from GameChatCollector.Selection.ChannelTypeScreener import ChannelTypeReviewBook, ChannelTypeScreener
+from GameChatCollector.Selection.ChatReplayChecker import ChatReplayChecker
 from GameChatCollector.Selection.CohortReporter import CohortReporter
 from GameChatCollector.Selection.EligibilityCriteria import build_default_criteria
+from GameChatCollector.Selection.EligibilityRejudger import EligibilityRejudger
 from GameChatCollector.Settings import Settings
+from GameChatCollector.Sources.WatchPageScraper import WatchPageScraper
 from GameChatCollector.Sources.YouTubeApiClient import YouTubeApiClient
 from GameChatCollector.Storage.CatalogRepository import CatalogRepository
 from GameChatCollector.Storage.RawStore import RawStore
@@ -43,6 +46,14 @@ class Context:
         self.repository = CatalogRepository(self.settings.catalog_path)
         self.budget = QuotaBudget(self.quota, self.repository, profile)
 
+    def build_screener(self) -> ChannelTypeScreener:
+        """Creates the C6 screener with the current review log."""
+        return ChannelTypeScreener(self.policy, ChannelTypeReviewBook.load(self.settings.config_dir / "ChannelTypeReviews.csv"))
+
+    def build_rejudger(self) -> EligibilityRejudger:
+        """Creates the offline rejudger."""
+        return EligibilityRejudger(self.policy, self.repository, build_default_criteria(), self.build_screener())
+
     def build_client(self) -> YouTubeApiClient:
         """Creates the Data API client (requires the API key)."""
         return YouTubeApiClient(self.settings.require_api_key(), self.budget, self.quota, RawStore(self.settings.raw_dir))
@@ -63,10 +74,25 @@ def discover_channels(reference_date: ReferenceOption, points: Annotated[int, ty
 def evaluate_channels(reference_date: ReferenceOption, max_candidates: Annotated[int, typer.Option(help="Maximum candidates to evaluate in this run.")] = 200, profile: ProfileOption = None) -> None:
     """Measures candidates not yet evaluated for this policy version and reference date (lane L3)."""
     context = Context(profile)
-    screener = ChannelTypeScreener(context.policy, ChannelTypeReviewBook.load(context.settings.config_dir / "ChannelTypeReviews.csv"))
-    evaluator = ChannelEligibilityEvaluator(context.policy, context.build_client(), context.repository, build_default_criteria(), screener, EligibilityPriorityRule(context.quota.priority, context.policy.hash_salt))
+    evaluator = ChannelEligibilityEvaluator(context.policy, context.build_client(), context.repository, build_default_criteria(), context.build_screener(), EligibilityPriorityRule(context.quota.priority, context.policy.hash_salt))
     report = evaluator.evaluate_pending_candidates(date.fromisoformat(reference_date), max_candidates)
     typer.echo(f"evaluated={report.evaluated} by_status={report.counts_by_status} budget_exhausted={report.is_budget_exhausted}")
+
+
+@channels_app.command("check-chat")
+def check_chat(reference_date: ReferenceOption, max_channels: Annotated[int, typer.Option(help="Maximum candidates to check in this run.")] = 100) -> None:
+    """Measures C5 from watch pages (no Data API quota); run it on a network where YouTube serves watch pages."""
+    context = Context()
+    checker = ChatReplayChecker(context.policy, context.repository, WatchPageScraper(), context.build_rejudger())
+    report = checker.check(reference_date, max_channels)
+    typer.echo(f"checked={report.checked_channels} pages={report.pages_fetched} blocked={report.is_blocked}")
+
+
+@channels_app.command("apply-reviews")
+def apply_reviews(reference_date: ReferenceOption) -> None:
+    """Re-judges stored evaluations after Config/ChannelTypeReviews.csv changes (offline)."""
+    changed = Context().build_rejudger().rejudge_all(reference_date)
+    typer.echo(f"status changed for {changed} channels")
 
 
 @channels_app.command("report")
