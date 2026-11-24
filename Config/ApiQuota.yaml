@@ -1,0 +1,37 @@
+# Data API quota lanes and priority-rule parameters (Docs/ChannelPolicy.md section 5).
+daily_units: 10000
+# Never spent automatically.
+reserve_share: 0.05
+# Unused lane shares become a shared pool this many hours before the Pacific-time reset.
+release_hours_before_reset: 4
+# Profile in force; "bootstrap" is used only while the first cohort is built (no L1/L2 work exists yet).
+active_profile: steady
+profiles:
+  steady:
+    L1_OPERATIONAL: 0.30
+    L2_BACKFILL: 0.40
+    L3_ELIGIBILITY: 0.20
+    L4_DISCOVERY: 0.05
+  bootstrap:
+    L1_OPERATIONAL: 0.05
+    L2_BACKFILL: 0.00
+    L3_ELIGIBILITY: 0.60
+    L4_DISCOVERY: 0.30
+
+priority:
+  # L1: a stream whose scheduled start is within this many minutes (or is live) is tier 0.
+  imminent_minutes: 15
+  # L1: the final metadata refetch happens this many hours after actualEndTime.
+  grace_hours: 2
+  # L2: backfill moves back in slices of this many days.
+  backfill_slice_days: 30
+  # L3: re-evaluation cooldown after failing a stable criterion (C1, C6) or a variable one (C2-C5).
+  stable_failure_cooldown_days: 180
+  variable_failure_cooldown_days: 60
+
+# Units per call, as documented by Google.
+costs:
+  search.list: 100
+  channels.list: 1
+  playlistItems.list: 1
+  videos.list: 1

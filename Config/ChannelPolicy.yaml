@@ -1,0 +1,59 @@
+# Channel inclusion policy (Docs/ChannelPolicy.md). Any change here requires a new policy_version.
+policy_version: "1.0.0"
+
+# Salt for the reproducible pseudo-random order (hash(channel_id + salt)) and for sampling.
+hash_salt: "gcc-policy-1"
+
+# Observation window: [reference_date - window_days, reference_date), in UTC.
+window_days: 180
+
+# Video classification used by all criteria.
+classification:
+  # A completed live stream shorter than this is ignored (test streams, most premieres).
+  min_live_duration_minutes: 15
+  # YouTube category IDs that count as game streams (20 = Gaming).
+  game_category_ids: [20]
+
+criteria:
+  # C1: share of live-stream titles in the window that contain hiragana or katakana.
+  c1_min_kana_title_share: 0.8
+  # C2: completed public game live streams in the window.
+  c2_min_game_streams: 8
+  # C3: game streams divided by all completed live streams in the window.
+  c3_min_game_share: 0.3
+  # C4: subscriberCount on the reference date; hidden counts fail.
+  c4_min_subscribers: 10000
+  # C5: share of sampled game streams whose chat replay is available.
+  c5_min_chat_replay_share: 0.5
+  c5_sample_size: 5
+
+# Cheap screening before the full measurement; it only skips candidates that cannot pass.
+screening:
+  # Full measurement is done only at or above this size, so sensitivity analysis can go down to it.
+  measurement_floor_subscribers: 5000
+  # Skip candidates with no kana in the channel title, channel description and every discovered title.
+  require_any_kana: true
+  # Upper bound on uploads-playlist pages (50 items each) read per candidate.
+  max_playlist_pages: 20
+  # Extra days before the window start that are read, because playlist dates precede stream starts.
+  playlist_buffer_days: 14
+
+# C6 automatic flags. A flagged candidate needs a human decision in Config/ChannelTypeReviews.csv.
+channel_type:
+  clip_keywords: ["切り抜き", "切抜き", "切り抜", "きりぬき", "clip", "clips", "非公式", "ファンチャンネル", "まとめ", "再アップ", "reupload"]
+  official_keywords: ["公式", "official", "esports", "e-sports", "株式会社", "inc.", "ltd.", "corporation", "gaming team", "チャンネル運営"]
+
+# Candidate discovery frame by search.list (Docs/ChannelPolicy.md section 3).
+search_frame:
+  # Points lie in the last frame_days before the reference date; older videos drop out of search (Rieder et al. 2025).
+  frame_days: 28
+  # Point i uses query_terms[i mod n]; "" means no keyword. Varying terms is recommended over time slicing alone (Efstratiou 2025).
+  query_terms: ["", "配信", "実況", "ゲーム"]
+  # Each point T searches completed Gaming live streams published in [T - lookback_hours, T), newest first.
+  lookback_hours: 6
+  # Hour of day (UTC) of point i is (i * hour_step) mod 24; the step must be coprime with 24.
+  hour_step: 7
+  max_results: 50
+  region_code: "JP"
+  relevance_language: "ja"
+  video_category_id: "20"

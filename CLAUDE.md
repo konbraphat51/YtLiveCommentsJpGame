@@ -52,6 +52,7 @@ def transcribe(
 ```
 
 - Prepare English and Japanese versions for all documents for humans to read.
+
   - Make English version as the primary version, and Japanese version as the secondary version.
     - ex: `README.md` (English) and `README.ja.md` (Japanese)
   - Documents only for AI agents does not require Japanese version.
@@ -88,6 +89,7 @@ export default {
 
 - Write documents to understand the code architecture. Such as: class diagram, sequence diagram...
 - In `/README.md`, write:
+
   - System Name as H1
   - Easy description of what system does
   - How to setup from `git clone`
@@ -95,6 +97,7 @@ export default {
   - Important CLIs
 
 - If API keys or other enviroment variables, read from `.env`
+
   - git ignore `.env`
   - create `.env.example`
 
@@ -140,11 +143,16 @@ export default {
 
 =Claude can freely edit below this line. Use this area to share project knowledge throught different chat sessions. Capture conventions, structure, commands, and gotchas so that agents joining later stay consistent with existing decisions.=
 
-- Design source of truth: `Docs/SystemDesign.md` (ja: `Docs/SystemDesign.ja.md`). Status as of 2026-11-24: design only, no code yet.
+- Design source of truth: `Docs/SystemDesign.md` (ja: `Docs/SystemDesign.ja.md`). Status as of 2026-11-24: channel selection + quota lanes implemented; other stages are design only.
 - Core concept: game attribution is per **segment** (`video_id`, `start_ms`, `end_ms`), merged from pluggable `EvidenceExtractor`s by priority MANUAL > CHAPTER > VISION > GAME_CARD > TITLE. Segment boundaries (`source`) and game identity (`identity_source`) may come from different sources.
 - VISION = cheap OpenAI vision model on sampled frames (3 per 30-minute bin, Batch API, candidate-constrained JSON output). Only `VisionClassificationStage` makes paid calls, so re-attribution is always free.
-- Channel inclusion is decided only by the versioned criteria C1–C6 in `Config/ChannelPolicy.yaml` (Design §4.2). Discovery source never decides inclusion. No manual inclusion; manual exclusion only with a logged reason. Each dataset version uses one fixed cohort.
-- Every Data API call goes through `ApiScheduler`: lanes L1 Operational > L2 Backfill (time-sliced round-robin) > L3 Eligibility > L4 Discovery. The quota day is Pacific Time. Never prioritize by popularity (Design §4.3).
+- Channel inclusion is decided only by the versioned criteria C1–C6 in `Config/ChannelPolicy.yaml`; exact spec in `Docs/ChannelPolicy.md` (keep it in sync with the YAML and bump `policy_version` on any change). Discovery source never decides inclusion. No manual inclusion; manual exclusion only with a logged reason. Each dataset version uses one fixed cohort.
+- Every Data API call is charged to a lane by `QuotaBudget` before it is sent (`YouTubeApiClient`); `ApiScheduler` with persisted work items is not built yet. Lanes: lanes L1 Operational > L2 Backfill (time-sliced round-robin) > L3 Eligibility > L4 Discovery. The quota day is Pacific Time. Never prioritize by popularity (Design §4.3).
 - Export is a star schema plus DuckDB views; `DatasetQuery` filters by game / comment / channel / time (Design §6.4).
 - The Data API does not expose the game title; it comes from the watch-page game card (`ytInitialData`). Verify the parser in the Phase 0 spike before relying on it.
-- Planned package: `Src/GameChatCollector/` (UpperCamelCase dirs and files, following the naming rules).
+- Package: `Src/GameChatCollector/` (UpperCamelCase dirs and files). Tests in `Tests/Test*.py` (pytest `python_files` is set for that). `uv run pytest`, `uv run mypy` (strict), `uv run ruff check Src Tests`, `uv run black Src Tests`, `pnpm dlx prettier@3.3.3 --write` for md/yaml.
+- The API key is read from `YOUTUBE_API_KEY` or `YT_API` (cloud env sets `YT_API`). Never print it.
+- Gotcha: YouTube watch pages (and anything on www.youtube.com except RSS) redirect cloud IPs to google.com/sorry. Do not try to bypass it; C5 (`check-chat`) must run on the user's network. The Data API works from the cloud.
+- Gotcha: `search.list` results decay 20–60 days after publication, so the search frame only covers the last 28 days (`frame_days`).
+- Cohort outputs are committed under `Cohorts/Policy<version>_<YYYYMMDD>/`; `Data/` (catalog, raw responses) is git-ignored and lost when the cloud container is reclaimed.
+- C6 decisions are human-only (`Config/ChannelTypeReviews.csv`); do not fill them in as Claude.

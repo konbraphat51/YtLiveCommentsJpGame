@@ -1,0 +1,55 @@
+[project]
+name = "game-chat-collector"
+version = "0.1.0"
+description = "Collects YouTube Live chat from Japanese game streamers and links each message to the game being played."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyyaml>=6.0",
+  "typer>=0.12",
+]
+
+[project.scripts]
+collector = "GameChatCollector.Cli:app"
+
+[dependency-groups]
+dev = [
+  "black>=24.4",
+  "mypy>=1.10",
+  "pytest>=8.2",
+  "ruff>=0.5",
+  "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["Src/GameChatCollector"]
+
+[tool.pytest.ini_options]
+testpaths = ["Tests"]
+python_files = ["Test*.py"]
+pythonpath = ["Src", "Tests"]
+
+[tool.mypy]
+strict = true
+mypy_path = "Src"
+packages = ["GameChatCollector"]
+plugins = ["pydantic.mypy"]
+
+[tool.black]
+line-length = 1000
+
+[tool.ruff]
+line-length = 1000
+src = ["Src", "Tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# Project naming rules require UpperCamelCase module and directory names.
+ignore = ["N999"]
