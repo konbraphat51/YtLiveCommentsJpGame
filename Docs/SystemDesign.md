@@ -2,7 +2,7 @@
 
 This document describes how the system collects YouTube Live chat from Japanese game streamers and links every comment to the game being played at that moment.
 
-- Status: Design (not yet implemented)
+- Status: Channel selection (section 4.2) and Data API lanes (section 4.3) are implemented. The other stages are still at the design stage.
 - Japanese version: [SystemDesign.ja.md](SystemDesign.ja.md)
 
 ## 1. Goal
@@ -156,22 +156,22 @@ Each transition is stored in `collection_runs` together with the error details, 
 
 **Population definition.** "Japanese game streamers" is defined operationally as **Japanese-language** YouTube channels that **regularly live-stream games** and are **at or above a minimum size**. Nationality and residence cannot be observed, so they are not used. The channel's `country` field is self-declared and often empty, so it is recorded but not used as a criterion.
 
-**Criteria.** The values below are proposed defaults and must be confirmed. They are all measured over an observation window that ends on a reference date.
+**Criteria.** The values below are those of policy 1.0.0. They are all measured over an observation window that ends on a reference date. The exact definitions (what counts as a live stream, the kana character ranges, the C5 sample, the staged evaluation) and the reasons for each threshold are in [ChannelPolicy.md](ChannelPolicy.md).
 
 | ID | Criterion | Measurement | Default threshold |
 | --- | --- | --- | --- |
 | C1 | Japanese language | Share of live-stream titles in the window that contain kana (hiragana or katakana) | ≥ 80% |
-| C2 | Game-streaming activity | Number of completed public live streams in the window that are game streams (`categoryId = 20`, or a game card, or a title resolved to a game) | ≥ 8 in 180 days |
+| C2 | Game-streaming activity | Number of completed public live streams (at least 15 minutes long) in the window with `categoryId = 20`. A game card implies this category. | ≥ 8 in 180 days |
 | C3 | Game-streaming share | Game streams ÷ all completed live streams in the window | ≥ 30% |
 | C4 | Size | `subscriberCount` from `channels.list` on the reference date. Channels that hide their subscriber count fail. | ≥ 10,000 |
-| C5 | Chat available | Share of the window's game streams that have chat replay available | ≥ 50% |
+| C5 | Chat available | Share of a reproducible sample of up to 5 game streams with chat replay available (read from the watch page) | ≥ 50% |
 | C6 | Channel type | Not an official company, publisher or esports-team channel; not a clip (切り抜き), re-upload or compilation channel; not `madeForKids` (chat is disabled) | Must hold |
 
-C1–C5 are computed automatically from API data. C6 cannot be judged reliably by a machine. Automatic signals (for example, `madeForKids` and clip keywords in the channel name) flag likely failures, and a human confirms each flag against a short written checklist (`Docs/ChannelTypeChecklist.md`, to be written). The decision and the reviewer are logged.
+C1–C4 are computed automatically from Data API responses, and C5 from watch pages. C6 cannot be judged reliably by a machine. `madeForKids` fails automatically. Clip or company keywords in the channel title or handle put the candidate on hold, and a human decides each one with the [checklist](ChannelTypeChecklist.md). The decision and the reviewer are logged in `Config/ChannelTypeReviews.csv`.
 
 **Candidate discovery (sampling frame).** All sources feed the same candidate table, and each candidate records which sources found it, so source-related bias can be analyzed later.
 
-- `ApiSearchCandidateSource`: Data API `search.list` with `type=video`, `eventType=completed`, `videoCategoryId=20`, `relevanceLanguage=ja` and `regionCode=JP`, run over time windows and a fixed list of query terms. This is the most neutral frame, but costs 100 units per call, so it runs with a fixed daily budget.
+- `ApiSearchCandidateSource`: Data API `search.list` with `type=video`, `eventType=completed`, `videoCategoryId=20`, `relevanceLanguage=ja`, `regionCode=JP` and `order=date`. It searches a deterministic sequence of 6-hour points over the last 28 days, spread over days, hours of the day and rotating query terms (ChannelPolicy.md section 3.1). Search results fade 20–60 days after publication, so only the recent past is searched. Each call costs 100 units, so the frame runs within the L4 budget.
 - `CsvCandidateSource`: curated lists, such as agency rosters, read from `Config/ChannelCandidates.csv`.
 - `CollabSnowballCandidateSource`: channels linked or @-mentioned in the descriptions of included channels' streams.
 
@@ -179,7 +179,7 @@ C1–C5 are computed automatically from API data. C6 cannot be judged reliably b
 
 - Thresholds, the window length and the query terms live in `Config/ChannelPolicy.yaml`, which carries a `policy_version`. Any change to it is a new version.
 - `ChannelEligibilityEvaluator` stores one row per candidate and evaluation in `channel_eligibility`: `(channel_id, policy_version, reference_date, metrics_json, passed, failed_criteria)`.
-- Evaluating one candidate costs about 10 API units: `channels.list` is batched 50 at a time, and `playlistItems.list` plus `videos.list` cover the window. 1,000 candidates cost about one day's default quota.
+- Evaluation is staged. `channels.list` (batched 50 at a time) screens out candidates with no kana anywhere, or with fewer than 5,000 subscribers, at almost no cost. Only the rest are measured with `playlistItems.list` plus `videos.list` (about 8–12 units each). The first run measured about a third of 1,274 search candidates, and the average cost was about 5 units per candidate.
 - **Cohort per dataset version.** Each dataset version fixes one evaluation (`policy_version` + `reference_date`). The channels that passed it form the cohort, and streams are exported only for those channels. Channels evaluated after the reference date do not join the cohort until a new dataset version is made. `MANIFEST.json` records the policy version, reference date and cohort size, and the eligibility table is exported as `channel_eligibility.parquet`.
 - **Overrides.** Manual *inclusion* outside the criteria is not allowed. Manual *exclusion* is allowed only for documented reasons (for example, a takedown request) and is logged with the reason, so it can be reported.
 - `Config/Channels.csv` keeps only curated **attributes** of channels (`group_name`, `is_vtuber`, `tags`). It no longer decides inclusion.
@@ -193,10 +193,10 @@ The default Data API quota is 10,000 units per day, and it **resets at midnight 
 - New uploads are discovered by RSS, which costs no quota.
 - A channel's uploads playlist ID is derived (`UC…` → `UU…`) instead of fetched.
 - `videos.list` and `channels.list` are always called with 50 IDs per call.
-- The cost of each method is set in `Config/ApiCosts.yaml`, and every call is recorded with the actual units spent.
+- The cost of each method is set in `Config/ApiQuota.yaml` (`costs`). Every call is charged to its lane before it is sent, and every response is archived raw.
 - Live chat is never read through `liveChatMessages.list` by default.
 
-**Lanes (daily budget split).** The default shares below are set in `Config/ApiQuota.yaml`. Each lane is guaranteed its share. Shares that are unused by a fixed time (default: 4 hours before the reset) are released to the remaining lanes, in lane order, so quota is not wasted. A safety reserve (default 5%) is never spent automatically.
+**Lanes (daily budget split).** The default shares below are the `steady` profile in `Config/ApiQuota.yaml`. A `bootstrap` profile (L3 60%, L4 30%) is used only while the first cohort is built. Each lane is guaranteed its share. Shares that are unused by a fixed time (default: 4 hours before the reset) are released to the remaining lanes, in lane order, so quota is not wasted. A safety reserve (default 5%) is never spent automatically.
 
 | Lane | Default share | Work | Why this rank |
 | --- | --- | --- | --- |
@@ -206,12 +206,12 @@ The default Data API quota is 10,000 units per day, and it **resets at midnight 
 | L4 Discovery | 5% | `search.list` for new candidates (100 units per call) | The most expensive, and the least urgent |
 | Reserve | 5% | Manual or emergency use | |
 
-**Priority rules within each lane.** A rule produces a sort key. Ties are broken by `hash(channel_id + salt)`, which gives a reproducible pseudo-random order. Popularity (subscriber count, view count) is **never** used as a priority, because a dataset that stops early would then be biased toward large channels.
+**Priority rules within each lane.** The exact sort keys and parameters are in [ChannelPolicy.md](ChannelPolicy.md) section 6. A rule produces a sort key. Ties are broken by `hash(channel_id + salt)`, which gives a reproducible pseudo-random order. Popularity (subscriber count, view count) is **never** used as a priority, because a dataset that stops early would then be biased toward large channels.
 
 - **L1 Operational:** (1) streams scheduled to start within the next 15 minutes, or currently live; (2) streams that ended more than the grace period ago and still need a final metadata refetch; (3) newly discovered videos, oldest discovery first.
 - **L2 Backfill: time-sliced round-robin.** History is collected newest-first in **time slices** (default 30 days). Slice *k* (for example, 30–60 days ago) begins only when every cohort channel has completed slice *k*−1. Within a slice, channels with the fewest collected game-stream hours go first. So whenever quota runs out, every channel is covered back to about the same date. A channel added to the cohort later catches up to the current slice first.
 - **L3 Eligibility:** (1) cohort channels whose re-evaluation is due for the next dataset version; (2) new candidates, taken **round-robin across discovery sources**, so no single source dominates the frame, and hash-ordered within each source; (3) candidates that failed before. Candidates that failed a stable criterion (C1 language, C6 channel type) are re-evaluated only after a cooldown (default 180 days). Those that failed a variable criterion (C2–C5) wait a shorter cooldown (default 60 days).
-- **L4 Discovery:** query terms × time windows in a fixed, round-robin order defined in `Config/ChannelPolicy.yaml`, so the search frame is the same every cycle. Windows that have never been searched go first.
+- **L4 Discovery:** the search points (day from a van der Corput sequence, hour stepping by 7, query term rotating) in their fixed sequence order, so any prefix covers the frame evenly. Points that have never been searched go first.
 
 **Exhaustion handling.**
 
@@ -820,9 +820,9 @@ Dataset/
   vYYYYMMDD/...
 Config/
   ChannelPolicy.yaml
-  ApiQuota.yaml           # lane shares, release time, reserve, cooldowns
-  ApiCosts.yaml
+  ApiQuota.yaml           # lane shares and profiles, release time, reserve, cooldowns, call costs
   ChannelCandidates.csv
+  ChannelTypeReviews.csv  # logged human C6 decisions
   Channels.csv            # curated attributes only (group, VTuber flag, tags)
   GameAliases.csv
   GameAttributes.csv
@@ -831,7 +831,7 @@ Config/
   Queries/*.yaml
 ```
 
-`Data/` and `Dataset/` are git-ignored. `Config/` is version-controlled, which keeps channel selection and the alias dictionary reproducible.
+`Data/` and `Dataset/` are git-ignored. `Config/` is version-controlled, which keeps channel selection and the alias dictionary reproducible. `Cohorts/Policy<version>_<YYYYMMDD>/` (eligibility list, cohort list, summary) is also committed, so every cohort can be reviewed.
 
 Rough sizing: a popular stream gets about 5k–30k messages per hour. With an average raw message of about 1 KB of JSON (about 100 B gzipped), 1,000 stream-hours of raw chat is about 1–3 GB.
 
@@ -873,7 +873,7 @@ Rough sizing: a popular stream gets about 5k–30k messages per hour. With an av
 | Watch-page parsing | `httpx` + JSON extraction of `ytInitialData` |
 | Frames | `ffmpeg` (system binary), driven through `yt-dlp` stream URLs; `Pillow` for resizing |
 | Vision | `openai` Python SDK (Structured Outputs, Batch API) |
-| Catalog | SQLite via `SQLAlchemy` 2.x (could later move to PostgreSQL) |
+| Catalog | SQLite through the standard `sqlite3` module behind `CatalogRepository` (all SQL in one class, so a move to SQLAlchemy or PostgreSQL stays local) |
 | Columnar data | `pyarrow` / Parquet; `duckdb` for analysis, export joins and the query layer; `polars` as an optional output |
 | Japanese text | `SudachiPy` + `sudachidict_core` for tokens and normalized forms |
 | Scheduling | `APScheduler` |
