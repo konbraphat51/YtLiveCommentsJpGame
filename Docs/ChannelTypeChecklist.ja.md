@@ -26,13 +26,13 @@
 
 `Config/ChannelTypeReviews.csv` に 1 行追加します。
 
-| 列 | 内容 |
-| --- | --- |
-| `channel_id` | `UC…` |
-| `decision` | `PASS` または `FAIL` |
-| `reason` | 質問番号と短い理由(例: `Q2: publisher channel`) |
-| `reviewer` | 判定者の名前またはイニシャル |
-| `reviewed_at` | `YYYY-MM-DD` |
+| 列            | 内容                                            |
+| ------------- | ----------------------------------------------- |
+| `channel_id`  | `UC…`                                           |
+| `decision`    | `PASS` または `FAIL`                            |
+| `reason`      | 質問番号と短い理由(例: `Q2: publisher channel`) |
+| `reviewer`    | 判定者の名前またはイニシャル                    |
+| `reviewed_at` | `YYYY-MM-DD`                                    |
 
 記録したら、次の 2 つのコマンドを順に実行します。
 

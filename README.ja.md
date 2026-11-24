@@ -52,14 +52,14 @@ uv run collector channels report --reference-date 2026-11-24
 
 ## 主なCLI
 
-| コマンド | 用途 |
-| --- | --- |
-| `collector channels discover` | `Config/ChannelCandidates.csv` と `search.list` による探索の枠から候補を追加する(レーン L4) |
-| `collector channels evaluate` | 候補の C1〜C4 と C6 を測定する(レーン L3) |
-| `collector channels check-chat` | 視聴ページから C5(チャットリプレイ)を測定する |
-| `collector channels apply-reviews` | C6 の人手判定を記録した後、保存済みの評価を判定し直す(通信なし) |
-| `collector channels report` | `Cohorts/` の下に `ChannelEligibility.csv`、`Cohort.csv`、`Summary.md` を書き出す |
-| `collector status` | 当日のレーンごとの Data API 消費量と残りを表示する |
+| コマンド                           | 用途                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| `collector channels discover`      | `Config/ChannelCandidates.csv` と `search.list` による探索の枠から候補を追加する(レーン L4) |
+| `collector channels evaluate`      | 候補の C1〜C4 と C6 を測定する(レーン L3)                                                   |
+| `collector channels check-chat`    | 視聴ページから C5(チャットリプレイ)を測定する                                               |
+| `collector channels apply-reviews` | C6 の人手判定を記録した後、保存済みの評価を判定し直す(通信なし)                             |
+| `collector channels report`        | `Cohorts/` の下に `ChannelEligibility.csv`、`Cohort.csv`、`Summary.md` を書き出す           |
+| `collector status`                 | 当日のレーンごとの Data API 消費量と残りを表示する                                          |
 
 ## 開発
 

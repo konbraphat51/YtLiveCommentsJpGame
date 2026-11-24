@@ -52,6 +52,7 @@ def transcribe(
 ```
 
 - Prepare English and Japanese versions for all documents for humans to read.
+
   - Make English version as the primary version, and Japanese version as the secondary version.
     - ex: `README.md` (English) and `README.ja.md` (Japanese)
   - Documents only for AI agents does not require Japanese version.
@@ -88,6 +89,7 @@ export default {
 
 - Write documents to understand the code architecture. Such as: class diagram, sequence diagram...
 - In `/README.md`, write:
+
   - System Name as H1
   - Easy description of what system does
   - How to setup from `git clone`
@@ -95,6 +97,7 @@ export default {
   - Important CLIs
 
 - If API keys or other enviroment variables, read from `.env`
+
   - git ignore `.env`
   - create `.env.example`
 

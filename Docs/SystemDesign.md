@@ -11,13 +11,13 @@ Build a reproducible pipeline whose final output is a dataset where **each chat 
 
 ### 1.1 Scope
 
-| In scope | Out of scope (for now) |
-| --- | --- |
-| Public live streams and their archives (chat replay) | Members-only streams, deleted or private archives |
-| Japanese streamers (VTubers and other streamers) | Shorts and premieres |
-| Game attribution at the **time-segment level** | Visual segmentation finer than the bin size (30 minutes by default) |
-| Coarse visual detection of gameplay from sampled still frames, using a low-cost OpenAI vision model | Downloading full video or audio; transcription |
-| Chat text, Super Chats, memberships, stickers, emoji | |
+| In scope                                                                                            | Out of scope (for now)                                              |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Public live streams and their archives (chat replay)                                                | Members-only streams, deleted or private archives                   |
+| Japanese streamers (VTubers and other streamers)                                                    | Shorts and premieres                                                |
+| Game attribution at the **time-segment level**                                                      | Visual segmentation finer than the bin size (30 minutes by default) |
+| Coarse visual detection of gameplay from sampled still frames, using a low-cost OpenAI vision model | Downloading full video or audio; transcription                      |
+| Chat text, Super Chats, memberships, stickers, emoji                                                |                                                                     |
 
 ### 1.2 Requirements
 
@@ -43,17 +43,17 @@ Non-functional
 
 These constraints shape the whole design.
 
-| Need | Source | Notes |
-| --- | --- | --- |
-| New and live videos per channel | Channel RSS feed `https://www.youtube.com/feeds/videos.xml?channel_id=...` | Costs no quota and returns the latest ~15 entries. Good for polling. |
-| Full upload history | Data API `playlistItems.list` on the uploads playlist | 1 unit per 50 items. Used for backfill. |
-| Stream metadata | Data API `videos.list` (`snippet`, `liveStreamingDetails`, `contentDetails`, `topicDetails`) | 1 unit per 50 videos. Returns `actualStartTime`/`actualEndTime`, `categoryId` (20 = Gaming) and genre-level `topicCategories`. **It does not return the game title.** |
-| Game title (video level) | The "Game" card on the watch page (in `ytInitialData`) | Set by the streamer and links to an auto-generated game topic channel, whose `browseId` gives a stable ID. Its internal structure changes over time, so it needs a robust parser (**to be verified in a Phase 0 spike**). |
-| Game transitions within a stream | Chapters (timestamp lines in the description), title brackets `【...】`, hashtags | Heuristic and needs the alias dictionary. |
-| Still frames at given times | `yt-dlp` resolves a video-only stream URL, then `ffmpeg -ss <t> -i <url> -frames:v 1` grabs one frame | Downloads only a small byte range per frame. Fallback: `yt-dlp` storyboard sprite sheets (`sb*` formats), which are very small images. |
-| What is on screen | Low-cost OpenAI vision model (Chat Completions or Responses API, `detail: "low"`, Structured Outputs) | Paid per token. The Batch API is cheaper when results are not needed immediately. |
-| Chat of finished streams | Chat replay via `yt-dlp` (`live_chat` subtitle track) or `chat-downloader` | Costs no quota. Each message has `videoOffsetTimeMsec`. Messages removed by moderators are missing. |
-| Chat during a live stream | `chat-downloader` / `pytchat` (or Data API `liveChatMessages.list`, which costs quota) | Needed for streamers who delete or privatize their archives. |
+| Need                             | Source                                                                                                | Notes                                                                                                                                                                                                                     |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New and live videos per channel  | Channel RSS feed `https://www.youtube.com/feeds/videos.xml?channel_id=...`                            | Costs no quota and returns the latest ~15 entries. Good for polling.                                                                                                                                                      |
+| Full upload history              | Data API `playlistItems.list` on the uploads playlist                                                 | 1 unit per 50 items. Used for backfill.                                                                                                                                                                                   |
+| Stream metadata                  | Data API `videos.list` (`snippet`, `liveStreamingDetails`, `contentDetails`, `topicDetails`)          | 1 unit per 50 videos. Returns `actualStartTime`/`actualEndTime`, `categoryId` (20 = Gaming) and genre-level `topicCategories`. **It does not return the game title.**                                                     |
+| Game title (video level)         | The "Game" card on the watch page (in `ytInitialData`)                                                | Set by the streamer and links to an auto-generated game topic channel, whose `browseId` gives a stable ID. Its internal structure changes over time, so it needs a robust parser (**to be verified in a Phase 0 spike**). |
+| Game transitions within a stream | Chapters (timestamp lines in the description), title brackets `【...】`, hashtags                     | Heuristic and needs the alias dictionary.                                                                                                                                                                                 |
+| Still frames at given times      | `yt-dlp` resolves a video-only stream URL, then `ffmpeg -ss <t> -i <url> -frames:v 1` grabs one frame | Downloads only a small byte range per frame. Fallback: `yt-dlp` storyboard sprite sheets (`sb*` formats), which are very small images.                                                                                    |
+| What is on screen                | Low-cost OpenAI vision model (Chat Completions or Responses API, `detail: "low"`, Structured Outputs) | Paid per token. The Batch API is cheaper when results are not needed immediately.                                                                                                                                         |
+| Chat of finished streams         | Chat replay via `yt-dlp` (`live_chat` subtitle track) or `chat-downloader`                            | Costs no quota. Each message has `videoOffsetTimeMsec`. Messages removed by moderators are missing.                                                                                                                       |
+| Chat during a live stream        | `chat-downloader` / `pytchat` (or Data API `liveChatMessages.list`, which costs quota)                | Needed for streamers who delete or privatize their archives.                                                                                                                                                              |
 
 ## 3. Architecture Overview
 
@@ -119,17 +119,17 @@ Every stage reads its input from storage and writes its output to storage. No st
 
 ## 4. Pipeline Stages
 
-| # | Stage | Input | Output | Trigger |
-| --- | --- | --- | --- | --- |
-| 1 | `ChannelRegistry` (`CandidateSource`s + `ChannelEligibilityEvaluator`) | Candidate channels from every discovery source, `Config/ChannelPolicy.yaml` | `channel_candidates`, `channel_eligibility`, `channels` (eligible only) | Monthly re-evaluation, plus manual runs |
-| 2 | `StreamDiscoverer` | `channels` | `videos` (state `DISCOVERED`) | RSS every 5–10 min; API backfill on demand |
-| 3 | `MetadataCollector` | `videos` | Raw API/watch-page snapshots; `videos` updated with live details and game card | When a video is discovered, and again once the stream has ended |
-| 4 | `ChatCollector` | Ended (or live) videos | Raw chat `*.jsonl.gz` | Archive: after `actualEndTime` + grace period. Live: while `liveBroadcastContent=live` |
-| 5 | `ChatNormalizer` | Raw chat | `messages` Parquet, partitioned by `video_id` | After stage 4 |
-| 6 | `FrameCollector` | Ended videos, bin plan | JPEG frames, `frames` | After `actualEndTime` + grace period. Runs in parallel with stage 4. |
-| 7 | `VisionClassificationStage` | Frames + video context | `vision_judgments` | After stage 6, subject to the run policy and spending cap |
-| 8 | `GameSegmenter` + `GameResolver` | Video metadata, vision judgments, alias dictionary | `game_segments` | After stages 3 and 7; rerun whenever the alias dictionary or aggregation rules change |
-| 9 | `DatasetExporter` | `messages` + `game_segments` + `games` | `Dataset/vYYYYMMDD/` | Manual |
+| #   | Stage                                                                  | Input                                                                       | Output                                                                         | Trigger                                                                                |
+| --- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| 1   | `ChannelRegistry` (`CandidateSource`s + `ChannelEligibilityEvaluator`) | Candidate channels from every discovery source, `Config/ChannelPolicy.yaml` | `channel_candidates`, `channel_eligibility`, `channels` (eligible only)        | Monthly re-evaluation, plus manual runs                                                |
+| 2   | `StreamDiscoverer`                                                     | `channels`                                                                  | `videos` (state `DISCOVERED`)                                                  | RSS every 5–10 min; API backfill on demand                                             |
+| 3   | `MetadataCollector`                                                    | `videos`                                                                    | Raw API/watch-page snapshots; `videos` updated with live details and game card | When a video is discovered, and again once the stream has ended                        |
+| 4   | `ChatCollector`                                                        | Ended (or live) videos                                                      | Raw chat `*.jsonl.gz`                                                          | Archive: after `actualEndTime` + grace period. Live: while `liveBroadcastContent=live` |
+| 5   | `ChatNormalizer`                                                       | Raw chat                                                                    | `messages` Parquet, partitioned by `video_id`                                  | After stage 4                                                                          |
+| 6   | `FrameCollector`                                                       | Ended videos, bin plan                                                      | JPEG frames, `frames`                                                          | After `actualEndTime` + grace period. Runs in parallel with stage 4.                   |
+| 7   | `VisionClassificationStage`                                            | Frames + video context                                                      | `vision_judgments`                                                             | After stage 6, subject to the run policy and spending cap                              |
+| 8   | `GameSegmenter` + `GameResolver`                                       | Video metadata, vision judgments, alias dictionary                          | `game_segments`                                                                | After stages 3 and 7; rerun whenever the alias dictionary or aggregation rules change  |
+| 9   | `DatasetExporter`                                                      | `messages` + `game_segments` + `games`                                      | `Dataset/vYYYYMMDD/`                                                           | Manual                                                                                 |
 
 ### 4.1 Video State Machine
 
@@ -152,20 +152,20 @@ Each transition is stored in `collection_runs` together with the error details, 
 
 ### 4.2 Channel Selection Policy (Uniform Inclusion Criteria)
 
-**Principle:** *how* a candidate was found never decides *whether* it is included. Candidates can come from any source. Every candidate is then measured by the same procedure and judged by the same thresholds. Only channels that pass all criteria are collected. This keeps the population well defined, and its bias is documented and measurable.
+**Principle:** _how_ a candidate was found never decides _whether_ it is included. Candidates can come from any source. Every candidate is then measured by the same procedure and judged by the same thresholds. Only channels that pass all criteria are collected. This keeps the population well defined, and its bias is documented and measurable.
 
 **Population definition.** "Japanese game streamers" is defined operationally as **Japanese-language** YouTube channels that **regularly live-stream games** and are **at or above a minimum size**. Nationality and residence cannot be observed, so they are not used. The channel's `country` field is self-declared and often empty, so it is recorded but not used as a criterion.
 
 **Criteria.** The values below are those of policy 1.0.0. They are all measured over an observation window that ends on a reference date. The exact definitions (what counts as a live stream, the kana character ranges, the C5 sample, the staged evaluation) and the reasons for each threshold are in [ChannelPolicy.md](ChannelPolicy.md).
 
-| ID | Criterion | Measurement | Default threshold |
-| --- | --- | --- | --- |
-| C1 | Japanese language | Share of live-stream titles in the window that contain kana (hiragana or katakana) | ≥ 80% |
-| C2 | Game-streaming activity | Number of completed public live streams (at least 15 minutes long) in the window with `categoryId = 20`. A game card implies this category. | ≥ 8 in 180 days |
-| C3 | Game-streaming share | Game streams ÷ all completed live streams in the window | ≥ 30% |
-| C4 | Size | `subscriberCount` from `channels.list` on the reference date. Channels that hide their subscriber count fail. | ≥ 10,000 |
-| C5 | Chat available | Share of a reproducible sample of up to 5 game streams with chat replay available (read from the watch page) | ≥ 50% |
-| C6 | Channel type | Not an official company, publisher or esports-team channel; not a clip (切り抜き), re-upload or compilation channel; not `madeForKids` (chat is disabled) | Must hold |
+| ID  | Criterion               | Measurement                                                                                                                                               | Default threshold |
+| --- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| C1  | Japanese language       | Share of live-stream titles in the window that contain kana (hiragana or katakana)                                                                        | ≥ 80%             |
+| C2  | Game-streaming activity | Number of completed public live streams (at least 15 minutes long) in the window with `categoryId = 20`. A game card implies this category.               | ≥ 8 in 180 days   |
+| C3  | Game-streaming share    | Game streams ÷ all completed live streams in the window                                                                                                   | ≥ 30%             |
+| C4  | Size                    | `subscriberCount` from `channels.list` on the reference date. Channels that hide their subscriber count fail.                                             | ≥ 10,000          |
+| C5  | Chat available          | Share of a reproducible sample of up to 5 game streams with chat replay available (read from the watch page)                                              | ≥ 50%             |
+| C6  | Channel type            | Not an official company, publisher or esports-team channel; not a clip (切り抜き), re-upload or compilation channel; not `madeForKids` (chat is disabled) | Must hold         |
 
 C1–C4 are computed automatically from Data API responses, and C5 from watch pages. C6 cannot be judged reliably by a machine. `madeForKids` fails automatically. Clip or company keywords in the channel title or handle put the candidate on hold, and a human decides each one with the [checklist](ChannelTypeChecklist.md). The decision and the reviewer are logged in `Config/ChannelTypeReviews.csv`.
 
@@ -181,7 +181,7 @@ C1–C4 are computed automatically from Data API responses, and C5 from watch pa
 - `ChannelEligibilityEvaluator` stores one row per candidate and evaluation in `channel_eligibility`: `(channel_id, policy_version, reference_date, metrics_json, passed, failed_criteria)`.
 - Evaluation is staged. `channels.list` (batched 50 at a time) screens out candidates with no kana anywhere, or with fewer than 5,000 subscribers, at almost no cost. Only the rest are measured with `playlistItems.list` plus `videos.list` (about 8–12 units each). The first run measured about a third of 1,274 search candidates, and the average cost was about 5 units per candidate.
 - **Cohort per dataset version.** Each dataset version fixes one evaluation (`policy_version` + `reference_date`). The channels that passed it form the cohort, and streams are exported only for those channels. Channels evaluated after the reference date do not join the cohort until a new dataset version is made. `MANIFEST.json` records the policy version, reference date and cohort size, and the eligibility table is exported as `channel_eligibility.parquet`.
-- **Overrides.** Manual *inclusion* outside the criteria is not allowed. Manual *exclusion* is allowed only for documented reasons (for example, a takedown request) and is logged with the reason, so it can be reported.
+- **Overrides.** Manual _inclusion_ outside the criteria is not allowed. Manual _exclusion_ is allowed only for documented reasons (for example, a takedown request) and is logged with the reason, so it can be reported.
 - `Config/Channels.csv` keeps only curated **attributes** of channels (`group_name`, `is_vtuber`, `tags`). It no longer decides inclusion.
 
 ### 4.3 Data API Quota and Fetch Priority Rules
@@ -198,18 +198,18 @@ The default Data API quota is 10,000 units per day, and it **resets at midnight 
 
 **Lanes (daily budget split).** The default shares below are the `steady` profile in `Config/ApiQuota.yaml`. A `bootstrap` profile (L3 60%, L4 30%) is used only while the first cohort is built. Each lane is guaranteed its share. Shares that are unused by a fixed time (default: 4 hours before the reset) are released to the remaining lanes, in lane order, so quota is not wasted. A safety reserve (default 5%) is never spent automatically.
 
-| Lane | Default share | Work | Why this rank |
-| --- | --- | --- | --- |
-| L1 Operational | 30% | `videos.list` for new videos from cohort channels, live-status checks before a scheduled start, refetching metadata after a stream ends | Time-critical. If it is missed, data is lost (for example, chapters that are never refetched, or live capture that never starts). |
-| L2 Backfill | 40% | `playlistItems.list` + `videos.list` for the past streams of cohort channels | Builds the historical dataset. It can wait, but should progress evenly. |
-| L3 Eligibility | 20% | Measuring C1–C5 for candidates (section 4.2) | Grows and maintains the cohort |
-| L4 Discovery | 5% | `search.list` for new candidates (100 units per call) | The most expensive, and the least urgent |
-| Reserve | 5% | Manual or emergency use | |
+| Lane           | Default share | Work                                                                                                                                    | Why this rank                                                                                                                     |
+| -------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| L1 Operational | 30%           | `videos.list` for new videos from cohort channels, live-status checks before a scheduled start, refetching metadata after a stream ends | Time-critical. If it is missed, data is lost (for example, chapters that are never refetched, or live capture that never starts). |
+| L2 Backfill    | 40%           | `playlistItems.list` + `videos.list` for the past streams of cohort channels                                                            | Builds the historical dataset. It can wait, but should progress evenly.                                                           |
+| L3 Eligibility | 20%           | Measuring C1–C5 for candidates (section 4.2)                                                                                            | Grows and maintains the cohort                                                                                                    |
+| L4 Discovery   | 5%            | `search.list` for new candidates (100 units per call)                                                                                   | The most expensive, and the least urgent                                                                                          |
+| Reserve        | 5%            | Manual or emergency use                                                                                                                 |                                                                                                                                   |
 
 **Priority rules within each lane.** The exact sort keys and parameters are in [ChannelPolicy.md](ChannelPolicy.md) section 6. A rule produces a sort key. Ties are broken by `hash(channel_id + salt)`, which gives a reproducible pseudo-random order. Popularity (subscriber count, view count) is **never** used as a priority, because a dataset that stops early would then be biased toward large channels.
 
 - **L1 Operational:** (1) streams scheduled to start within the next 15 minutes, or currently live; (2) streams that ended more than the grace period ago and still need a final metadata refetch; (3) newly discovered videos, oldest discovery first.
-- **L2 Backfill: time-sliced round-robin.** History is collected newest-first in **time slices** (default 30 days). Slice *k* (for example, 30–60 days ago) begins only when every cohort channel has completed slice *k*−1. Within a slice, channels with the fewest collected game-stream hours go first. So whenever quota runs out, every channel is covered back to about the same date. A channel added to the cohort later catches up to the current slice first.
+- **L2 Backfill: time-sliced round-robin.** History is collected newest-first in **time slices** (default 30 days). Slice _k_ (for example, 30–60 days ago) begins only when every cohort channel has completed slice *k*−1. Within a slice, channels with the fewest collected game-stream hours go first. So whenever quota runs out, every channel is covered back to about the same date. A channel added to the cohort later catches up to the current slice first.
 - **L3 Eligibility:** (1) cohort channels whose re-evaluation is due for the next dataset version; (2) new candidates, taken **round-robin across discovery sources**, so no single source dominates the frame, and hash-ordered within each source; (3) candidates that failed before. Candidates that failed a stable criterion (C1 language, C6 channel type) are re-evaluated only after a cooldown (default 180 days). Those that failed a variable criterion (C2–C5) wait a shorter cooldown (default 60 days).
 - **L4 Discovery:** the search points (day from a van der Corput sequence, hour stepping by 7, query term rotating) in their fixed sequence order, so any prefix covers the frame evenly. Points that have never been searched go first.
 
@@ -229,13 +229,13 @@ This is the core of the system. One stream can contain several games, so the uni
 
 ### 5.1 Evidence Sources (Highest Priority First)
 
-| Priority | Source (`AttributionSource`) | Granularity | Typical reliability |
-| --- | --- | --- | --- |
-| 1 | `MANUAL`: human annotation | Segment | Ground truth |
-| 2 | `CHAPTER`: description timestamps such as `1:02:03 マリオカート8DX`, resolved through the alias dictionary | Segment | High when present |
-| 3 | `VISION`: OpenAI vision model applied to sampled frames (section 5.4) | 30-minute bin | Medium to high for gameplay vs. non-gameplay; game identity is reliable mainly when it matches a candidate |
-| 4 | `GAME_CARD`: YouTube game card (topic channel ID) | Whole video | High, but only one game per video |
-| 5 | `TITLE`: bracket or hashtag parsing, for example `【#マイクラ】` or `【APEX】`, resolved through the alias dictionary | Whole video | Medium |
+| Priority | Source (`AttributionSource`)                                                                                          | Granularity   | Typical reliability                                                                                        |
+| -------- | --------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1        | `MANUAL`: human annotation                                                                                            | Segment       | Ground truth                                                                                               |
+| 2        | `CHAPTER`: description timestamps such as `1:02:03 マリオカート8DX`, resolved through the alias dictionary            | Segment       | High when present                                                                                          |
+| 3        | `VISION`: OpenAI vision model applied to sampled frames (section 5.4)                                                 | 30-minute bin | Medium to high for gameplay vs. non-gameplay; game identity is reliable mainly when it matches a candidate |
+| 4        | `GAME_CARD`: YouTube game card (topic channel ID)                                                                     | Whole video   | High, but only one game per video                                                                          |
+| 5        | `TITLE`: bracket or hashtag parsing, for example `【#マイクラ】` or `【APEX】`, resolved through the alias dictionary | Whole video   | Medium                                                                                                     |
 
 The two questions are kept apart. **When** gameplay happens (the segment boundaries) and **which** game is played (the identity) can come from different sources. For example, vision may find the gameplay bins while the game card supplies the game. A segment records both `source` (where the boundaries came from) and `identity_source` (where the `game_id` came from).
 
@@ -469,23 +469,23 @@ erDiagram
 
 ### 6.2 Normalized Messages (Parquet)
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| `message_id` | string | YouTube message ID (deduplication key) |
-| `video_id` | string | |
-| `video_offset_ms` | int64 | Offset from the start of the video. Used to join with segments. |
-| `posted_at` | timestamp (UTC) | From `timestampUsec` |
-| `author_key` | string | HMAC-SHA256 of the author's channel ID, keyed with a secret from `.env` |
-| `message_type` | enum | `TEXT`, `SUPER_CHAT`, `SUPER_STICKER`, `MEMBERSHIP`, `GIFT`, `SYSTEM` |
-| `text` | string | Plain text, with emoji replaced by `:shortcode:` |
-| `text_norm` | string | `text` after NFKC normalization, lowercasing and collapsing repeated characters (for example `wwwww` → `www`). Used for keyword search. |
-| `tokens` | list<string> | Japanese morphological tokens (SudachiPy, normalized forms). Used for token-level search and analysis. |
-| `char_len`, `emoji_count` | int | Precomputed text features |
-| `emoji_ids` | list<string> | Including custom (member) emoji |
-| `amount_micros`, `currency` | int64, string | Super Chat only |
-| `is_member`, `member_months` | bool, int | From badges |
-| `is_moderator`, `is_owner`, `is_verified` | bool | |
-| `capture_mode` | enum | `REPLAY` or `LIVE` |
+| Column                                    | Type            | Notes                                                                                                                                   |
+| ----------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `message_id`                              | string          | YouTube message ID (deduplication key)                                                                                                  |
+| `video_id`                                | string          |                                                                                                                                         |
+| `video_offset_ms`                         | int64           | Offset from the start of the video. Used to join with segments.                                                                         |
+| `posted_at`                               | timestamp (UTC) | From `timestampUsec`                                                                                                                    |
+| `author_key`                              | string          | HMAC-SHA256 of the author's channel ID, keyed with a secret from `.env`                                                                 |
+| `message_type`                            | enum            | `TEXT`, `SUPER_CHAT`, `SUPER_STICKER`, `MEMBERSHIP`, `GIFT`, `SYSTEM`                                                                   |
+| `text`                                    | string          | Plain text, with emoji replaced by `:shortcode:`                                                                                        |
+| `text_norm`                               | string          | `text` after NFKC normalization, lowercasing and collapsing repeated characters (for example `wwwww` → `www`). Used for keyword search. |
+| `tokens`                                  | list<string>    | Japanese morphological tokens (SudachiPy, normalized forms). Used for token-level search and analysis.                                  |
+| `char_len`, `emoji_count`                 | int             | Precomputed text features                                                                                                               |
+| `emoji_ids`                               | list<string>    | Including custom (member) emoji                                                                                                         |
+| `amount_micros`, `currency`               | int64, string   | Super Chat only                                                                                                                         |
+| `is_member`, `member_months`              | bool, int       | From badges                                                                                                                             |
+| `is_moderator`, `is_owner`, `is_verified` | bool            |                                                                                                                                         |
+| `capture_mode`                            | enum            | `REPLAY` or `LIVE`                                                                                                                      |
 
 ### 6.3 Exported Dataset
 
@@ -504,21 +504,21 @@ The dataset is modeled as a **star schema**. Messages form the fact table, and c
 
 **Prepared views in `Dataset.duckdb`:**
 
-| View | Content |
-| --- | --- |
-| `v_messages` | The fact table joined with every dimension: one wide row per message, including the game title (ja/en), genres, the channel group and so on |
-| `v_game_segments` | Segments with their game and channel attributes, duration and message count |
-| `v_game_stats` | Per-game totals: streams, channels, stream-hours, messages, Super Chat amount |
-| `v_channel_game_matrix` | Channel × game: stream-hours and messages |
+| View                    | Content                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v_messages`            | The fact table joined with every dimension: one wide row per message, including the game title (ja/en), genres, the channel group and so on |
+| `v_game_segments`       | Segments with their game and channel attributes, duration and message count                                                                 |
+| `v_game_stats`          | Per-game totals: streams, channels, stream-hours, messages, Super Chat amount                                                               |
+| `v_channel_game_matrix` | Channel × game: stream-hours and messages                                                                                                   |
 
 **Supported filters (all combinable):**
 
-| Axis | Filters |
-| --- | --- |
-| Game | `game_id`; any alias (resolved through `game_aliases`, so `マイクラ` finds Minecraft); genre; platform; release year; `label_type` (including `NON_GAME`, which isolates talk segments); minimum `attribution_confidence`; allowed `attribution_source` values; `has_conflict` |
+| Axis    | Filters                                                                                                                                                                                                                                                                               |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Game    | `game_id`; any alias (resolved through `game_aliases`, so `マイクラ` finds Minecraft); genre; platform; release year; `label_type` (including `NON_GAME`, which isolates talk segments); minimum `attribution_confidence`; allowed `attribution_source` values; `has_conflict`        |
 | Comment | `message_type` (text, Super Chat, membership and so on); keyword (substring on `text_norm`, exact token in `tokens`, or regex); emoji ID; `author_key` (follow one pseudonymous viewer across channels); member / moderator / owner flags; Super Chat amount range; text length range |
-| Channel | `channel_id`; `group_name`; `is_vtuber`; subscriber-count band; `tags` |
-| Time | Posting date range; `segment_offset_ms` range (for example, only the first 10 minutes of each game); `stream_offset_ratio` range |
+| Channel | `channel_id`; `group_name`; `is_vtuber`; subscriber-count band; `tags`                                                                                                                                                                                                                |
+| Time    | Posting date range; `segment_offset_ms` range (for example, only the first 10 minutes of each game); `stream_offset_ratio` range                                                                                                                                                      |
 
 **Interfaces:**
 
@@ -864,21 +864,21 @@ Rough sizing: a popular stream gets about 5k–30k messages per hour. With an av
 
 ## 13. Technology Stack
 
-| Concern | Choice |
-| --- | --- |
-| Language / packages | Python 3.12+, `uv`, strict typing (`mypy --strict` or `pyright` strict), `ruff`, `black` |
-| CLI | `typer` |
-| YouTube API | `google-api-python-client` or plain `httpx` |
-| Chat | `yt-dlp` (replay), `chat-downloader` (live and replay; fallback) |
-| Watch-page parsing | `httpx` + JSON extraction of `ytInitialData` |
-| Frames | `ffmpeg` (system binary), driven through `yt-dlp` stream URLs; `Pillow` for resizing |
-| Vision | `openai` Python SDK (Structured Outputs, Batch API) |
-| Catalog | SQLite through the standard `sqlite3` module behind `CatalogRepository` (all SQL in one class, so a move to SQLAlchemy or PostgreSQL stays local) |
-| Columnar data | `pyarrow` / Parquet; `duckdb` for analysis, export joins and the query layer; `polars` as an optional output |
-| Japanese text | `SudachiPy` + `sudachidict_core` for tokens and normalized forms |
-| Scheduling | `APScheduler` |
-| Config / secrets | `pydantic-settings` reading `.env` (`YOUTUBE_API_KEY`, `AUTHOR_HASH_SECRET`, `OPENAI_API_KEY`, `OPENAI_VISION_MODEL`, `VISION_BIN_MS`, `VISION_FRAMES_PER_BIN`, `VISION_RUN_POLICY`, `VISION_DAILY_BUDGET_USD`) |
-| Tests | `pytest` with recorded fixtures (no network in unit tests) |
+| Concern             | Choice                                                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Language / packages | Python 3.12+, `uv`, strict typing (`mypy --strict` or `pyright` strict), `ruff`, `black`                                                                                                                        |
+| CLI                 | `typer`                                                                                                                                                                                                         |
+| YouTube API         | `google-api-python-client` or plain `httpx`                                                                                                                                                                     |
+| Chat                | `yt-dlp` (replay), `chat-downloader` (live and replay; fallback)                                                                                                                                                |
+| Watch-page parsing  | `httpx` + JSON extraction of `ytInitialData`                                                                                                                                                                    |
+| Frames              | `ffmpeg` (system binary), driven through `yt-dlp` stream URLs; `Pillow` for resizing                                                                                                                            |
+| Vision              | `openai` Python SDK (Structured Outputs, Batch API)                                                                                                                                                             |
+| Catalog             | SQLite through the standard `sqlite3` module behind `CatalogRepository` (all SQL in one class, so a move to SQLAlchemy or PostgreSQL stays local)                                                               |
+| Columnar data       | `pyarrow` / Parquet; `duckdb` for analysis, export joins and the query layer; `polars` as an optional output                                                                                                    |
+| Japanese text       | `SudachiPy` + `sudachidict_core` for tokens and normalized forms                                                                                                                                                |
+| Scheduling          | `APScheduler`                                                                                                                                                                                                   |
+| Config / secrets    | `pydantic-settings` reading `.env` (`YOUTUBE_API_KEY`, `AUTHOR_HASH_SECRET`, `OPENAI_API_KEY`, `OPENAI_VISION_MODEL`, `VISION_BIN_MS`, `VISION_FRAMES_PER_BIN`, `VISION_RUN_POLICY`, `VISION_DAILY_BUDGET_USD`) |
+| Tests               | `pytest` with recorded fixtures (no network in unit tests)                                                                                                                                                      |
 
 ## 14. Proposed Source Layout
 
@@ -905,13 +905,13 @@ Docs/
 
 ## 15. Roadmap
 
-| Phase | Deliverable |
-| --- | --- |
-| 0. Spike | Confirm on about 20 real streams: the game-card location in `ytInitialData`, the `yt-dlp` chat replay format and offsets, how often chapters are used, and that `ffmpeg` seeking on archive stream URLs works. Hand-label 30-minute bins and compare two low-cost OpenAI models on accuracy and cost per stream-hour. Write the findings to `ResearchNotes/`. |
-| 1. MVP (archive) | Channel policy v1 (candidate sources, automated C1–C5, C6 checklist review) → cohort → stream discovery → metadata → replay chat → normalization with text features → `GAME_CARD` and `TITLE` attribution → star-schema export with DuckDB views → `DatasetQuery` and `collector query` |
-| 2. Segments | Vision coarse segmentation (frames, Batch API classification, bin aggregation), chapter parsing, alias curation workflow, unresolved-token report, validation sample |
-| 3. Live capture | `LiveChatSource` worker for channels that delete their archives; deduplication against the replay |
-| 4. Enrichment | IGDB / Wikidata linkage (genre, release year, platform); finer vision boundaries by sampling more densely only inside bins where the game changes |
+| Phase            | Deliverable                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Spike         | Confirm on about 20 real streams: the game-card location in `ytInitialData`, the `yt-dlp` chat replay format and offsets, how often chapters are used, and that `ffmpeg` seeking on archive stream URLs works. Hand-label 30-minute bins and compare two low-cost OpenAI models on accuracy and cost per stream-hour. Write the findings to `ResearchNotes/`. |
+| 1. MVP (archive) | Channel policy v1 (candidate sources, automated C1–C5, C6 checklist review) → cohort → stream discovery → metadata → replay chat → normalization with text features → `GAME_CARD` and `TITLE` attribution → star-schema export with DuckDB views → `DatasetQuery` and `collector query`                                                                       |
+| 2. Segments      | Vision coarse segmentation (frames, Batch API classification, bin aggregation), chapter parsing, alias curation workflow, unresolved-token report, validation sample                                                                                                                                                                                          |
+| 3. Live capture  | `LiveChatSource` worker for channels that delete their archives; deduplication against the replay                                                                                                                                                                                                                                                             |
+| 4. Enrichment    | IGDB / Wikidata linkage (genre, release year, platform); finer vision boundaries by sampling more densely only inside bins where the game changes                                                                                                                                                                                                             |
 
 ## 16. Open Questions
 

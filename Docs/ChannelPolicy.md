@@ -18,14 +18,14 @@ This document gives the exact, quantitative definition of which YouTube channels
 
 All times are UTC unless stated otherwise.
 
-| Term | Definition |
-| --- | --- |
-| Reference date `R` | The date the cohort is fixed on. The window ends at `R` 00:00 UTC. |
-| Observation window `W` | `[R − 180 days, R)` (`window_days: 180`). |
-| Live stream | A public upload whose `liveStreamingDetails` has both `actualStartTime` and `actualEndTime`, whose `actualStartTime ∈ W`, and whose actual length `actualEndTime − actualStartTime` is **at least 15 minutes** (`min_live_duration_minutes`). The length rule drops test streams and most premieres (premieres also carry `liveStreamingDetails`). |
-| Game stream | A live stream whose `snippet.categoryId ∈ {20}` (Gaming, `game_category_ids`). YouTube shows the game card only in the Gaming category, so every stream with a game card is counted. |
-| Kana title | A title containing at least one character in U+3041–U+3096 (hiragana) or U+30A1–U+30FA (katakana). The middle dot `・` and the prolonged sound mark `ー` are excluded, because they also appear in non-Japanese text. |
-| Uploads read | The uploads playlist (`UU…`, derived from `UC…`) is read newest first until an item older than `W.start − 14 days` appears (`playlist_buffer_days`), or 20 pages (1,000 items) have been read (`max_playlist_pages`). The buffer exists because a stream's playlist date is when it was scheduled, which can be days before it starts. |
+| Term                   | Definition                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reference date `R`     | The date the cohort is fixed on. The window ends at `R` 00:00 UTC.                                                                                                                                                                                                                                                                                 |
+| Observation window `W` | `[R − 180 days, R)` (`window_days: 180`).                                                                                                                                                                                                                                                                                                          |
+| Live stream            | A public upload whose `liveStreamingDetails` has both `actualStartTime` and `actualEndTime`, whose `actualStartTime ∈ W`, and whose actual length `actualEndTime − actualStartTime` is **at least 15 minutes** (`min_live_duration_minutes`). The length rule drops test streams and most premieres (premieres also carry `liveStreamingDetails`). |
+| Game stream            | A live stream whose `snippet.categoryId ∈ {20}` (Gaming, `game_category_ids`). YouTube shows the game card only in the Gaming category, so every stream with a game card is counted.                                                                                                                                                               |
+| Kana title             | A title containing at least one character in U+3041–U+3096 (hiragana) or U+30A1–U+30FA (katakana). The middle dot `・` and the prolonged sound mark `ー` are excluded, because they also appear in non-Japanese text.                                                                                                                              |
+| Uploads read           | The uploads playlist (`UU…`, derived from `UC…`) is read newest first until an item older than `W.start − 14 days` appears (`playlist_buffer_days`), or 20 pages (1,000 items) have been read (`max_playlist_pages`). The buffer exists because a stream's playlist date is when it was scheduled, which can be days before it starts.             |
 
 ## 3. Candidate Frame
 
@@ -58,14 +58,14 @@ Every discovery is stored in `candidate_discoveries` with its source, so the com
 
 A channel is in the cohort only if all six criteria are `PASS`.
 
-| ID | Criterion | Measured value | Threshold (1.0.0) | Stable? |
-| --- | --- | --- | --- | --- |
-| C1 | Japanese language | Kana titles ÷ live streams in `W` | **≥ 0.80** | Yes |
-| C2 | Game-streaming activity | Number of game streams in `W` | **≥ 8** (on average one every 22.5 days) | No |
-| C3 | Game-streaming share | Game streams ÷ live streams in `W` | **≥ 0.30** | No |
-| C4 | Size | `subscriberCount` from `channels.list` on the evaluation day; a hidden count fails | **≥ 10,000** | No |
-| C5 | Chat available | Share of the C5 sample with chat replay available | **≥ 0.50** | No |
-| C6 | Channel type | Not a clip, re-upload, company, publisher or team channel; not `madeForKids` | Must hold ([checklist](ChannelTypeChecklist.md)) | Yes |
+| ID  | Criterion               | Measured value                                                                     | Threshold (1.0.0)                                | Stable? |
+| --- | ----------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------ | ------- |
+| C1  | Japanese language       | Kana titles ÷ live streams in `W`                                                  | **≥ 0.80**                                       | Yes     |
+| C2  | Game-streaming activity | Number of game streams in `W`                                                      | **≥ 8** (on average one every 22.5 days)         | No      |
+| C3  | Game-streaming share    | Game streams ÷ live streams in `W`                                                 | **≥ 0.30**                                       | No      |
+| C4  | Size                    | `subscriberCount` from `channels.list` on the evaluation day; a hidden count fails | **≥ 10,000**                                     | No      |
+| C5  | Chat available          | Share of the C5 sample with chat replay available                                  | **≥ 0.50**                                       | No      |
+| C6  | Channel type            | Not a clip, re-upload, company, publisher or team channel; not `madeForKids`       | Must hold ([checklist](ChannelTypeChecklist.md)) | Yes     |
 
 Undefined values fail. If there are no live streams, C1 and C3 fail.
 
@@ -89,11 +89,13 @@ Undefined values fail. If there are no live streams, C1 and C3 fail.
 Evaluation runs in stages, so expensive measurement is spent only where a pass is possible. Each candidate costs the following Data API units.
 
 1. `channels.list` (batched 50 per call, about 0.02 units per candidate). The candidate stops here with stage `SCREENED` if any of these holds:
+
    - C6 already fails (`madeForKids`);
    - none of the channel title, the channel description and the discovered video titles contains kana (recorded as a C1 failure);
    - the subscriber count is hidden or below the **measurement floor of 5,000** (recorded as a C4 failure).
 
    The floor is half of the C4 threshold, so the sensitivity analysis can go down to 5,000.
+
 2. Uploads playlist plus `videos.list` (about 1 unit per 50 uploads, twice). This gives stage `MEASURED`, and C1–C4 and C6 are judged.
 3. Watch pages of the C5 sample (no Data API quota; at most 1 request per second, with jitter). C5 is judged.
 
@@ -105,13 +107,13 @@ Status: any `FAIL` → `FAILED`. Otherwise, any `PENDING` → `PENDING`. Otherwi
 
 The Data API quota is 10,000 units per day, and the day is counted in Pacific Time (it resets at 00:00 PT, which is 17:00 JST in winter and 16:00 JST in summer). `QuotaBudget` charges every call **before** it is sent. A call that does not fit the lane's remaining budget is refused.
 
-| Lane | `steady` share (units) | `bootstrap` share (units) | Work |
-| --- | --- | --- | --- |
-| L1 Operational | 30% (3,000) | 5% (500) | New videos of cohort channels, live checks, final refetch after streams |
-| L2 Backfill | 40% (4,000) | 0% (0) | Past streams of cohort channels |
-| L3 Eligibility | 20% (2,000) | 60% (6,000) | Measuring candidates (section 4.2) |
-| L4 Discovery | 5% (500) | 30% (3,000) | `search.list` points (100 units each) |
-| Reserve | 5% (500) | 5% (500) | Never spent automatically |
+| Lane           | `steady` share (units) | `bootstrap` share (units) | Work                                                                    |
+| -------------- | ---------------------- | ------------------------- | ----------------------------------------------------------------------- |
+| L1 Operational | 30% (3,000)            | 5% (500)                  | New videos of cohort channels, live checks, final refetch after streams |
+| L2 Backfill    | 40% (4,000)            | 0% (0)                    | Past streams of cohort channels                                         |
+| L3 Eligibility | 20% (2,000)            | 60% (6,000)               | Measuring candidates (section 4.2)                                      |
+| L4 Discovery   | 5% (500)               | 30% (3,000)               | `search.list` points (100 units each)                                   |
+| Reserve        | 5% (500)               | 5% (500)                  | Never spent automatically                                               |
 
 - `bootstrap` is used only while the first cohort is built, when there is no L1 or L2 work yet. In normal operation the profile is `steady`.
 - **Release.** From 4 hours before the reset (`release_hours_before_reset`), unused shares are pooled. Any lane may then spend up to `9,500 − (units spent today)`. Lanes are served in order L1 → L4.
@@ -121,12 +123,12 @@ The Data API quota is 10,000 units per day, and the day is counted in Pacific Ti
 
 Each rule is a sort key, and smaller keys run first. `h(x) = sha256(x + hash_salt)` is the reproducible pseudo-random tie-breaker. No key contains subscriber or view counts.
 
-| Lane | Sort key | Runnable when |
-| --- | --- | --- |
-| L1 | `(tier, reference_time, h(video_id))`. tier 0: live, or scheduled to start within 15 min (`imminent_minutes`). tier 1: final metadata refetch at least 2 h after `actualEndTime` (`grace_hours`). tier 2: newly discovered video, ordered by discovery time | Tier 0 only from 15 min before the start; tier 1 only after the grace period |
-| L2 | `(k, collected_game_hours, h(channel_id))`, where slice `k` covers `[now − 30(k+1) d, now − 30k d)` (`backfill_slice_days`) | Only channels whose next slice equals the lowest open slice across the cohort. Slice *k* starts only when every channel has finished slice *k*−1 |
-| L3 | `(tier, r, source)`. tier 0: re-evaluation of cohort channels for the next version. tier 1: new candidates. tier 2: retries. `r` is the candidate's rank by `h(channel_id)` within its tier and primary source, so the sources take turns (round-robin) | A retry is runnable only after its cooldown: **180 days** if it failed a stable criterion (C1 or C6), **60 days** otherwise |
-| L4 | `(times_searched, i)` | Points never searched come first, in sequence order |
+| Lane | Sort key                                                                                                                                                                                                                                                    | Runnable when                                                                                                                                    |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L1   | `(tier, reference_time, h(video_id))`. tier 0: live, or scheduled to start within 15 min (`imminent_minutes`). tier 1: final metadata refetch at least 2 h after `actualEndTime` (`grace_hours`). tier 2: newly discovered video, ordered by discovery time | Tier 0 only from 15 min before the start; tier 1 only after the grace period                                                                     |
+| L2   | `(k, collected_game_hours, h(channel_id))`, where slice `k` covers `[now − 30(k+1) d, now − 30k d)` (`backfill_slice_days`)                                                                                                                                 | Only channels whose next slice equals the lowest open slice across the cohort. Slice _k_ starts only when every channel has finished slice *k*−1 |
+| L3   | `(tier, r, source)`. tier 0: re-evaluation of cohort channels for the next version. tier 1: new candidates. tier 2: retries. `r` is the candidate's rank by `h(channel_id)` within its tier and primary source, so the sources take turns (round-robin)     | A retry is runnable only after its cooldown: **180 days** if it failed a stable criterion (C1 or C6), **60 days** otherwise                      |
+| L4   | `(times_searched, i)`                                                                                                                                                                                                                                       | Points never searched come first, in sequence order                                                                                              |
 
 Consequences:
 
@@ -138,11 +140,11 @@ Consequences:
 
 `collector channels report` writes `Cohorts/Policy<version>_<YYYYMMDD>/`:
 
-| File | Content |
-| --- | --- |
-| `ChannelEligibility.csv` | Every evaluated candidate: status, stage, failed and pending criteria, measured values, C6 flags, sources |
-| `Cohort.csv` | The rows with status `PASSED` or `PENDING` |
-| `Summary.md` | Counts by stage, status and source; failure counts per criterion; quantiles of each metric; one-at-a-time sensitivity table |
+| File                     | Content                                                                                                                     |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `ChannelEligibility.csv` | Every evaluated candidate: status, stage, failed and pending criteria, measured values, C6 flags, sources                   |
+| `Cohort.csv`             | The rows with status `PASSED` or `PENDING`                                                                                  |
+| `Summary.md`             | Counts by stage, status and source; failure counts per criterion; quantiles of each metric; one-at-a-time sensitivity table |
 
 CSV files are UTF-8 with a BOM, so Excel on Windows opens them correctly. The full measurements (`metrics_json`) and the raw API responses stay in `Data/` (git-ignored).
 

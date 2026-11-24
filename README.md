@@ -52,14 +52,14 @@ uv run collector channels report --reference-date 2026-11-24
 
 ## Important CLIs
 
-| Command | Purpose |
-| --- | --- |
-| `collector channels discover` | Adds candidates from `Config/ChannelCandidates.csv` and from the `search.list` frame (lane L4) |
-| `collector channels evaluate` | Measures candidates for C1–C4 and C6 (lane L3) |
-| `collector channels check-chat` | Measures C5 (chat replay) from watch pages |
-| `collector channels apply-reviews` | Re-judges stored evaluations after C6 review decisions (offline) |
-| `collector channels report` | Writes `ChannelEligibility.csv`, `Cohort.csv` and `Summary.md` under `Cohorts/` |
-| `collector status` | Shows Data API units spent and remaining per lane today |
+| Command                            | Purpose                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `collector channels discover`      | Adds candidates from `Config/ChannelCandidates.csv` and from the `search.list` frame (lane L4) |
+| `collector channels evaluate`      | Measures candidates for C1–C4 and C6 (lane L3)                                                 |
+| `collector channels check-chat`    | Measures C5 (chat replay) from watch pages                                                     |
+| `collector channels apply-reviews` | Re-judges stored evaluations after C6 review decisions (offline)                               |
+| `collector channels report`        | Writes `ChannelEligibility.csv`, `Cohort.csv` and `Summary.md` under `Cohorts/`                |
+| `collector status`                 | Shows Data API units spent and remaining per lane today                                        |
 
 ## Development
 
