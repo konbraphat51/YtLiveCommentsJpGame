@@ -48,7 +48,7 @@ uv run collector channels check-chat --reference-date 2026-11-24
 uv run collector channels report --reference-date 2026-11-24
 ```
 
-`check-chat` reads watch pages and needs a network where YouTube serves them (cloud IP addresses get a bot check). After logging C6 decisions in `Config/ChannelTypeReviews.csv`, run `apply-reviews` and then `report` again.
+`check-chat` reads watch pages and needs a network where YouTube serves them (cloud IP addresses get a bot check). To continue the 2026-11-24 cohort on another machine without spending quota again, copy `Cohorts/Policy1.0.0_20261124/Catalog.sqlite` (a snapshot of the catalog) to `Data/Catalog.sqlite` first. After logging C6 decisions in `Config/ChannelTypeReviews.csv`, run `apply-reviews` and then `report` again.
 
 ## Important CLIs
 

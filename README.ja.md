@@ -48,7 +48,7 @@ uv run collector channels check-chat --reference-date 2026-11-24
 uv run collector channels report --reference-date 2026-11-24
 ```
 
-`check-chat` は視聴ページを読むので、YouTube が視聴ページを返すネットワークで実行してください。クラウドのIPアドレスでは、ボット確認の画面になります。C6 の判定を `Config/ChannelTypeReviews.csv` に記録したら、`apply-reviews` を実行してから、もう一度 `report` を実行します。
+`check-chat` は視聴ページを読むので、YouTube が視聴ページを返すネットワークで実行してください。クラウドのIPアドレスでは、ボット確認の画面になります。2026-11-24 のコホートを別のマシンで続けるときは、先に `Cohorts/Policy1.0.0_20261124/Catalog.sqlite`(カタログのスナップショット)を `Data/Catalog.sqlite` にコピーしてください。そうすれば、クォータを使い直さずに済みます。C6 の判定を `Config/ChannelTypeReviews.csv` に記録したら、`apply-reviews` を実行してから、もう一度 `report` を実行します。
 
 ## 主なCLI
 
