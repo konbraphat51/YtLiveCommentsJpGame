@@ -152,6 +152,10 @@ class CohortReporter:
                 thresholds = base.model_copy(update={field: typed_value})
                 marker = " (policy)" if value == getattr(base, field) else ""
                 lines.append(f"| {field} | {_format_number(value)}{marker} | {self.count_passing(measured, c6_failed, thresholds)} |")
+        lines += ["", "## C6 review queue (decide with Docs/ChannelTypeChecklist.md)", "", "| channel_id | Title | Flags |", "| --- | --- | --- |"]
+        for record in records:
+            if "C6" in record.pending_criteria:
+                lines.append(f"| {record.channel_id} | {record.channel.get('title', '')} | {record.criteria.get('C6', {}).get('value') or ''} |")
         lines.append("")
         return "\n".join(lines)
 

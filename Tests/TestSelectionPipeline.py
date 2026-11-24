@@ -93,5 +93,6 @@ def test_pipeline_discovers_evaluates_and_reports(tmp_path: Path) -> None:
 
     files = CohortReporter(policy).write(list(records.values()), repository.list_candidates(), tmp_path / "Out")
     assert GOOD in files.cohort_csv.read_text(encoding="utf-8-sig")
-    assert "Sensitivity" in files.summary_md.read_text(encoding="utf-8")
+    summary = files.summary_md.read_text(encoding="utf-8")
+    assert "Sensitivity" in summary and "C6 review queue" in summary
     assert any((tmp_path / "Raw" / "Api").rglob("*.json.gz"))
