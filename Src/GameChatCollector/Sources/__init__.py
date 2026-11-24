@@ -1,0 +1,1 @@
+"""Sources layer of GameChatCollector."""

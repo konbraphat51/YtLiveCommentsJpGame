@@ -1,0 +1,1 @@
+"""Selection layer of GameChatCollector."""

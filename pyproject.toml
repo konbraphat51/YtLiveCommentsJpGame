@@ -33,7 +33,8 @@ packages = ["Src/GameChatCollector"]
 
 [tool.pytest.ini_options]
 testpaths = ["Tests"]
-pythonpath = ["Src"]
+python_files = ["Test*.py"]
+pythonpath = ["Src", "Tests"]
 
 [tool.mypy]
 strict = true
